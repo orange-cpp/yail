@@ -30,13 +30,13 @@ namespace
         PVOID dll_base;
         PVOID entry_point;
         ULONG size_of_image;
-        UNICODE_STRING full_dll_name;
-        UNICODE_STRING base_dll_name;
-        ULONG flags;
-        USHORT obsolete_load_count;
-        USHORT tls_index;
+        [[maybe_unused]] UNICODE_STRING full_dll_name;
+        [[maybe_unused]] UNICODE_STRING base_dll_name;
+        [[maybe_unused]] ULONG flags;
+        [[maybe_unused]] USHORT obsolete_load_count;
+        [[maybe_unused]] USHORT tls_index;
         LIST_ENTRY hash_links;
-        ULONG time_date_stamp;
+        [[maybe_unused]] ULONG time_date_stamp;
     };
     using LdrpHandleTlsDataFn = NTSTATUS(NTAPI*)(LdrDataTableEntryFull*);
     using RtlInsertInvertedFunctionTableFn = void(NTAPI*)(PVOID image_base, ULONG size_of_image);
@@ -124,14 +124,12 @@ namespace
         }
 
         // --- Handle static TLS ---
-        auto& tls_directory = nt_headers->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_TLS];
+        // ReSharper disable once CppUseStructuredBinding
+        const auto& tls_directory = nt_headers->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_TLS];
         if (tls_directory.Size && data->fn_ldrp_handle_tls_data)
         {
             // Build fake LDR_DATA_TABLE_ENTRY on the stack — zero without memset
-            LdrDataTableEntryFull entry;
-            auto* raw = reinterpret_cast<volatile uint8_t*>(&entry);
-            for (size_t i = 0; i < sizeof(entry); i++)
-                raw[i] = 0;
+            LdrDataTableEntryFull entry{};
 
             entry.dll_base = base;
             entry.size_of_image = nt_headers->OptionalHeader.SizeOfImage;
@@ -146,7 +144,7 @@ namespace
             entry.hash_links.Flink = &entry.hash_links;
             entry.hash_links.Blink = &entry.hash_links;
 
-            reinterpret_cast<NTSTATUS(NTAPI*)(LdrDataTableEntryFull*)>(data->fn_ldrp_handle_tls_data)(&entry);
+            (reinterpret_cast<NTSTATUS(NTAPI*)(LdrDataTableEntryFull*)>(data->fn_ldrp_handle_tls_data)(&entry));
         }
 
         // --- TLS callbacks ---
