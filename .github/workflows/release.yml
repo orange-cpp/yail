@@ -1,0 +1,46 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  release-windows-x64:
+    name: Windows x64 Release (vcpkg)
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install Ninja
+        uses: seanmiddleditch/gha-setup-ninja@v5
+
+      - name: Cache vcpkg
+        uses: actions/cache@v4
+        with:
+          path: cmake-build/vcpkg_installed
+          key: vcpkg-windows-x64-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json') }}
+          restore-keys: vcpkg-windows-x64-
+
+      - name: Configure
+        run: cmake --preset windows-release-vcpkg
+
+      - name: Build
+        run: cmake --build cmake-build/build/windows-release-vcpkg --config Release --parallel
+
+      - name: Install
+        run: cmake --install cmake-build/build/windows-release-vcpkg --prefix dist
+
+      - name: Pack
+        run: tar -czf yail-${{ github.ref_name }}-windows-x64.tar.gz -C dist .
+
+      - name: Upload release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: yail-${{ github.ref_name }}-windows-x64.tar.gz
