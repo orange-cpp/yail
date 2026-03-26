@@ -78,9 +78,11 @@ namespace
     };
     // Disable all CRT instrumentation so the function is fully self-contained.
     // No __security_check_cookie, no __RTC_*, no __chkstk references.
+#ifdef _MSC_VER
 #pragma runtime_checks("", off)
 #pragma optimize("ts", on)
 #pragma strict_gs_check(push, off)
+#endif
     __declspec(safebuffers) __declspec(noinline) DWORD WINAPI remote_shellcode(const RemoteLoaderData* data)
     {
         auto* base = data->image_base;
@@ -192,9 +194,11 @@ namespace
     {
     }
 
+#ifdef _MSC_VER
 #pragma strict_gs_check(pop)
 #pragma runtime_checks("", restore)
 #pragma optimize("", on)
+#endif
     [[nodiscard]]
     bool is_portable_executable(const std::span<uint8_t>& raw_dll)
     {
