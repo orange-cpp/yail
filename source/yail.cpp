@@ -83,6 +83,7 @@ namespace
         decltype(&LoadLibraryA) fn_load_library_a;
         decltype(&GetProcAddress) fn_get_proc_address;
         decltype(&RtlAddFunctionTable) fn_rtl_add_function_table;
+        decltype(&VirtualProtect) fn_virtual_protect;
         void* fn_ldrp_handle_tls_data;
         void* fn_rtl_insert_inverted_function_table;
     };
@@ -187,6 +188,48 @@ namespace
                 data->fn_rtl_add_function_table(
                         reinterpret_cast<IMAGE_RUNTIME_FUNCTION_ENTRY*>(base + VirtualAddress),
                         Size / sizeof(IMAGE_RUNTIME_FUNCTION_ENTRY), reinterpret_cast<std::uintptr_t>(base));
+            }
+        }
+
+        // --- Apply per-section memory protections ---
+        {
+            auto* section = reinterpret_cast<IMAGE_SECTION_HEADER*>(
+                    reinterpret_cast<std::uint8_t*>(&nt_headers->OptionalHeader) + nt_headers->FileHeader.SizeOfOptionalHeader);
+
+            for (std::uint16_t i = 0; i < nt_headers->FileHeader.NumberOfSections; i++, section++)
+            {
+                if (!section->Misc.VirtualSize)
+                    continue;
+
+                DWORD protect = PAGE_NOACCESS;
+                const DWORD sc = section->Characteristics;
+
+                if (sc & IMAGE_SCN_MEM_EXECUTE)
+                {
+                    if (sc & IMAGE_SCN_MEM_WRITE)
+                        protect = PAGE_EXECUTE_READWRITE;
+                    else if (sc & IMAGE_SCN_MEM_READ)
+                        protect = PAGE_EXECUTE_READ;
+                    else
+                        protect = PAGE_EXECUTE;
+                }
+                else if (sc & IMAGE_SCN_MEM_WRITE)
+                {
+                    if (sc & IMAGE_SCN_MEM_READ)
+                        protect = PAGE_READWRITE;
+                    else
+                        protect = PAGE_WRITECOPY;
+                }
+                else if (sc & IMAGE_SCN_MEM_READ)
+                {
+                    protect = PAGE_READONLY;
+                }
+
+                if (sc & IMAGE_SCN_MEM_NOT_CACHED)
+                    protect |= PAGE_NOCACHE;
+
+                DWORD old_protect;
+                data->fn_virtual_protect(base + section->VirtualAddress, section->Misc.VirtualSize, protect, &old_protect);
             }
         }
 
@@ -369,6 +412,7 @@ namespace yail
         loader_data.fn_load_library_a = LoadLibraryA;
         loader_data.fn_get_proc_address = GetProcAddress;
         loader_data.fn_rtl_add_function_table = RtlAddFunctionTable;
+        loader_data.fn_virtual_protect = VirtualProtect;
         const auto tls_fn = find_ldrp_handle_tls_data();
         if (!tls_fn)
         {
