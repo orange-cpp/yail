@@ -1,4 +1,6 @@
 #include <Windows.h>
+#include <DbgHelp.h>
+#include <mmsystem.h>
 #include <cstdio>
 #include <cmath>
 #include <cstring>
@@ -504,6 +506,35 @@ static bool TestVEH()
 }
 
 // =========================================================================
+// 21. Delay imports — DbgHelp.dll (delay-loaded)
+// =========================================================================
+static bool TestDelayImportDbgHelp()
+{
+    // SymSetOptions / SymGetOptions are simple stateless calls from dbghelp.dll.
+    // If delay import resolution works, the call succeeds without crash.
+    const DWORD original = SymGetOptions();
+    SymSetOptions(original | SYMOPT_UNDNAME);
+    const DWORD updated = SymGetOptions();
+    SymSetOptions(original); // restore
+    return (updated & SYMOPT_UNDNAME) != 0;
+}
+
+// =========================================================================
+// 22. Delay imports — Winmm.dll (delay-loaded)
+// =========================================================================
+static bool TestDelayImportWinmm()
+{
+    // timeGetDevCaps is a simple query from winmm.dll.
+    TIMECAPS tc{};
+    const MMRESULT result = timeGetDevCaps(&tc, sizeof(tc));
+    if (result != TIMERR_NOERROR)
+        return false;
+
+    // Sanity: minimum resolution should be > 0 and <= maximum
+    return tc.wPeriodMin > 0 && tc.wPeriodMin <= tc.wPeriodMax;
+}
+
+// =========================================================================
 // DllMain
 // =========================================================================
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD dwReason, LPVOID lpReserved)
@@ -536,6 +567,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD dwReason, LPVOID lpReserved)
     Report("Global constructors",       TestGlobalCtors());
     Report("Vtable dispatch",           TestVTable());
     Report("Vectored exception handler",TestVEH());
+    Report("Delay import DbgHelp",     TestDelayImportDbgHelp());
+    Report("Delay import Winmm",       TestDelayImportWinmm());
 
     printf("\n========================================\n");
     printf("[test_dll] Results: %d/%d passed\n", g_passed, g_total);

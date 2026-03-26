@@ -136,6 +136,50 @@ namespace
             }
         }
 
+        // --- Resolve delay imports ---
+        // ReSharper disable once CppUseStructuredBinding
+        // ReSharper disable once CppTooWideScopeInitStatement
+        const auto& delay_dir = nt_headers->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT];
+        if (delay_dir.Size)
+        {
+            auto* delay_desc = reinterpret_cast<IMAGE_DELAYLOAD_DESCRIPTOR*>(base + delay_dir.VirtualAddress);
+            while (delay_desc->DllNameRVA)
+            {
+                const HMODULE module_handle = data->fn_load_library_a(
+                        reinterpret_cast<LPCSTR>(base + delay_desc->DllNameRVA));
+                if (!module_handle)
+                    return 3;
+
+                const auto* name_thunk = reinterpret_cast<IMAGE_THUNK_DATA*>(
+                        base + delay_desc->ImportNameTableRVA);
+                auto* addr_thunk = reinterpret_cast<IMAGE_THUNK_DATA*>(
+                        base + delay_desc->ImportAddressTableRVA);
+
+                while (name_thunk->u1.AddressOfData)
+                {
+                    FARPROC fn;
+                    if (name_thunk->u1.Ordinal & IMAGE_ORDINAL_FLAG)
+                        fn = data->fn_get_proc_address(module_handle,
+                                                       reinterpret_cast<LPCSTR>(name_thunk->u1.Ordinal & 0xFFFF));
+                    else
+                    {
+                        const auto* ibn = reinterpret_cast<IMAGE_IMPORT_BY_NAME*>(
+                                base + name_thunk->u1.AddressOfData);
+                        fn = data->fn_get_proc_address(module_handle, ibn->Name);
+                    }
+                    if (!fn)
+                        return 4;
+                    addr_thunk->u1.Function = reinterpret_cast<std::uintptr_t>(fn);
+                    name_thunk++;
+                    addr_thunk++;
+                }
+
+                delay_desc->ModuleHandleRVA =
+                        static_cast<DWORD>(reinterpret_cast<std::uint8_t*>(module_handle) - base);
+                delay_desc++;
+            }
+        }
+
         // --- Handle static TLS ---
         // ReSharper disable once CppUseStructuredBinding
         const auto& tls_directory = nt_headers->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_TLS];

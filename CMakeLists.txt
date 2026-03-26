@@ -38,7 +38,8 @@ if (YAIL_BUILD_EXAMPLES)
 
     add_library(test_dll MODULE examples/test_dll.cpp)
     set_target_properties(test_dll PROPERTIES CXX_STANDARD 23)
-    target_link_libraries(test_dll PRIVATE yail)
+    target_link_libraries(test_dll PRIVATE yail dbghelp winmm delayimp)
+    target_link_options(test_dll PRIVATE /DELAYLOAD:dbghelp.dll /DELAYLOAD:winmm.dll)
 endif()
 
 
