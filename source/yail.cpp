@@ -225,7 +225,7 @@ namespace
             auto* info = reinterpret_cast<uint16_t*>(block + 1);
             for (size_t i = 0; i < count; i++, info++)
             {
-                if ((*info >> 0x0C) != IMAGE_REL_BASED_DIR64))
+                if (*info >> 0x0C != IMAGE_REL_BASED_DIR64)
                     continue;
                 auto* patch = reinterpret_cast<uintptr_t*>(local_image + block->VirtualAddress + (*info & 0xFFF));
                 *patch += delta;
