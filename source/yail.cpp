@@ -7,14 +7,6 @@
 #include <omath/utility/pe_pattern_scan.hpp>
 #include <yail/yail.hpp>
 #include <fstream>
-#define RELOC_FLAG32(RelInfo) ((RelInfo >> 0x0C) == IMAGE_REL_BASED_HIGHLOW)
-#define RELOC_FLAG64(RelInfo) ((RelInfo >> 0x0C) == IMAGE_REL_BASED_DIR64)
-
-#ifdef _WIN64
-#define RELOC_FLAG RELOC_FLAG64
-#else
-#define RELOC_FLAG RELOC_FLAG32
-#endif
 namespace
 {
     // Resolve MSVC incremental-link jump stubs (ILT): E9 xx xx xx xx → target
@@ -233,7 +225,7 @@ namespace
             auto* info = reinterpret_cast<uint16_t*>(block + 1);
             for (size_t i = 0; i < count; i++, info++)
             {
-                if (!RELOC_FLAG(*info))
+                if ((*info >> 0x0C) != IMAGE_REL_BASED_DIR64))
                     continue;
                 auto* patch = reinterpret_cast<uintptr_t*>(local_image + block->VirtualAddress + (*info & 0xFFF));
                 *patch += delta;
