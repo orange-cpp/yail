@@ -309,19 +309,20 @@ namespace
         return nt_headers->FileHeader.Machine == IMAGE_FILE_MACHINE_AMD64;
     }
 
-    void relocate_for_base(std::uint8_t* local_image, const std::uintptr_t target_base)
+    [[nodiscard]]
+    bool relocate_for_base(std::uint8_t* local_image, const std::uintptr_t target_base)
     {
         const auto* dos_headers = reinterpret_cast<IMAGE_DOS_HEADER*>(local_image);
         auto* nt_headers = reinterpret_cast<IMAGE_NT_HEADERS*>(local_image + dos_headers->e_lfanew);
 
         const auto delta = static_cast<std::intptr_t>(target_base - nt_headers->OptionalHeader.ImageBase);
         if (delta == 0)
-            return;
+            return true;
 
         // ReSharper disable once CppUseStructuredBinding
         const auto& relocation_directory = nt_headers->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC];
         if (!relocation_directory.Size)
-            return;
+            return false;
 
         auto* block = reinterpret_cast<IMAGE_BASE_RELOCATION*>(local_image + relocation_directory.VirtualAddress);
         while (block->SizeOfBlock && block->VirtualAddress)
@@ -339,6 +340,7 @@ namespace
         }
 
         nt_headers->OptionalHeader.ImageBase = target_base;
+        return true;
     }
     [[nodiscard]]
     std::optional<std::uintptr_t> get_process_id_by_name(const std::string_view& process_name)
@@ -415,7 +417,12 @@ namespace yail
         }
 
         // Relocate for remote base address
-        relocate_for_base(local_image.data(), reinterpret_cast<std::uintptr_t>(remote_image));
+        if (!relocate_for_base(local_image.data(), reinterpret_cast<std::uintptr_t>(remote_image)))
+        {
+            VirtualFreeEx(process_handle, remote_image, 0, MEM_RELEASE);
+            CloseHandle(process_handle);
+            return std::unexpected("Image requires relocation but has no relocation directory");
+        }
 
         // Write image to target
         if (!WriteProcessMemory(process_handle, remote_image, local_image.data(), image_size, nullptr))
