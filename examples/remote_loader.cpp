@@ -22,7 +22,7 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    printf("[remote_loader] Success — remote image at 0x%llX\n",
+    printf("[remote_loader] Success - remote image at 0x%llX\n",
            static_cast<unsigned long long>(result.value()));
     return 0;
 }

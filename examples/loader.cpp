@@ -19,6 +19,6 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    std::println("\n[loader] Success — image loaded at 0x{:x}\n", result.value());
+    std::println("\n[loader] Success - image loaded at 0x{:x}\n", result.value());
     return 0;
 }
