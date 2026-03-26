@@ -129,7 +129,10 @@ namespace
         if (tls_directory.Size && data->fn_ldrp_handle_tls_data)
         {
             // Build fake LDR_DATA_TABLE_ENTRY on the stack — zero without memset
-            LdrDataTableEntryFull entry{};
+            LdrDataTableEntryFull entry;
+            auto* raw = reinterpret_cast<volatile uint8_t*>(&entry);
+            for (size_t i = 0; i < sizeof(entry); i++)
+                raw[i] = 0;
 
             entry.dll_base = base;
             entry.size_of_image = nt_headers->OptionalHeader.SizeOfImage;
