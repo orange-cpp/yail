@@ -72,11 +72,8 @@ namespace
 
         const auto* ntdll = GetModuleHandleA("ntdll.dll");
         for (const auto* sig : signatures)
-        {
-            const auto result = omath::PePatternScanner::scan_for_pattern_in_loaded_module(ntdll, sig);
-            if (result)
+            if (const auto result = omath::PePatternScanner::scan_for_pattern_in_loaded_module(ntdll, sig))
                 return reinterpret_cast<RtlInsertInvertedFunctionTableFn>(result.value());
-        }
 
         throw std::runtime_error{"Failed to find RtlInsertInvertedFunctionTable"};
     }
