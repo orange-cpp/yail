@@ -4,9 +4,10 @@
 #include <Windows.h>
 #include <TlHelp32.h>
 #include <winternl.h>
+#include <array>
+#include <fstream>
 #include <omath/utility/pe_pattern_scan.hpp>
 #include <yail/yail.hpp>
-#include <fstream>
 namespace
 {
     // Resolve MSVC incremental-link jump stubs (ILT): E9 xx xx xx xx → target
@@ -44,26 +45,40 @@ namespace
     [[nodiscard]]
     LdrpHandleTlsDataFn find_ldrp_handle_tls_data()
     {
-        const auto result = omath::PePatternScanner::scan_for_pattern_in_loaded_module(
-                GetModuleHandleA("ntdll.dll"), "4C 8B DC 49 89 5B ? 49 89 73 ? 57 41 54 41 55 41 56 41 57 48 81 EC ? ? ? ? 48 8B 05 ? ? "
-                             "? ? 48 33 C4 48 89 84 24 ? ? ? ? 48 8B F9");
+        constexpr std::array signatures = {
+            "4C 8B DC 49 89 5B ? 49 89 73 ? 57 41 54 41 55 41 56 41 57 48 81 EC ? ? ? ? 48 8B 05 ? ? ? ? 48 33 C4 48 89 84 24 ? ? ? ? 48 8B F9", // Windows 11 24H2
+            "48 89 5C 24 ? 48 89 74 24 ? 48 89 7C 24 ? 41 55 41 56 41 57 48 81 EC",
 
-        if (!result)
-            throw std::runtime_error{"Failed to find LdrpHandleTlsData"};
+        };
 
-        return reinterpret_cast<LdrpHandleTlsDataFn>(result.value());
+        const auto* ntdll = GetModuleHandleA("ntdll.dll");
+        for (const auto* sig : signatures)
+        {
+            const auto result = omath::PePatternScanner::scan_for_pattern_in_loaded_module(ntdll, sig);
+            if (result)
+                return reinterpret_cast<LdrpHandleTlsDataFn>(result.value());
+        }
+
+        throw std::runtime_error{"Failed to find LdrpHandleTlsData"};
     }
 
     [[nodiscard]]
     RtlInsertInvertedFunctionTableFn find_rtl_insert_inverted_function_table()
     {
-        const auto result = omath::PePatternScanner::scan_for_pattern_in_loaded_module(
-                GetModuleHandleA("ntdll.dll"), "48 8B C4 48 89 58 ? 48 89 68 ? 48 89 70 ? 57 48 83 EC ? 83 60");
+        constexpr std::array signatures = {
+            "48 8B C4 48 89 58 ? 48 89 68 ? 48 89 70 ? 57 48 83 EC ? 83 60", // Windows 11 24H2
+            "4C 8B DC 49 89 5B ? 49 89 73 ? 57 48 83 EC ? 8B FA"
+        };
 
-        if (!result)
-            throw std::runtime_error{"Failed to find RtlInsertInvertedFunctionTable"};
+        const auto* ntdll = GetModuleHandleA("ntdll.dll");
+        for (const auto* sig : signatures)
+        {
+            const auto result = omath::PePatternScanner::scan_for_pattern_in_loaded_module(ntdll, sig);
+            if (result)
+                return reinterpret_cast<RtlInsertInvertedFunctionTableFn>(result.value());
+        }
 
-        return reinterpret_cast<RtlInsertInvertedFunctionTableFn>(result.value());
+        throw std::runtime_error{"Failed to find RtlInsertInvertedFunctionTable"};
     }
     struct RemoteLoaderData final
     {
