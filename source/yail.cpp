@@ -5,6 +5,7 @@
 #include <TlHelp32.h>
 #include <winternl.h>
 #include <array>
+#include <format>
 #include <fstream>
 #include <omath/utility/pe_pattern_scan.hpp>
 #include <yail/yail.hpp>
@@ -13,12 +14,12 @@ namespace
     // Resolve MSVC incremental-link jump stubs (ILT): E9 xx xx xx xx → target
 
     [[nodiscard]]
-    uint8_t* resolve_ilt(void* fn)
+    std::uint8_t* resolve_ilt(void* fn)
     {
-        auto* p = static_cast<uint8_t*>(fn);
+        auto* p = static_cast<std::uint8_t*>(fn);
         if (p[0] == 0xE9)
         {
-            const auto rel = *reinterpret_cast<int32_t*>(p + 1);
+            const auto rel = *reinterpret_cast<std::int32_t*>(p + 1);
             return p + 5 + rel;
         }
         return p;
@@ -43,7 +44,7 @@ namespace
     using RtlInsertInvertedFunctionTableFn = void(NTAPI*)(PVOID image_base, ULONG size_of_image);
 
     [[nodiscard]]
-    LdrpHandleTlsDataFn find_ldrp_handle_tls_data()
+    std::expected<LdrpHandleTlsDataFn, std::string> find_ldrp_handle_tls_data()
     {
         constexpr std::array signatures = {
             "4C 8B DC 49 89 5B ? 49 89 73 ? 57 41 54 41 55 41 56 41 57 48 81 EC ? ? ? ? 48 8B 05 ? ? ? ? 48 33 C4 48 89 84 24 ? ? ? ? 48 8B F9", // Windows 11 24H2
@@ -53,17 +54,14 @@ namespace
 
         const auto* ntdll = GetModuleHandleA("ntdll.dll");
         for (const auto* sig : signatures)
-        {
-            const auto result = omath::PePatternScanner::scan_for_pattern_in_loaded_module(ntdll, sig);
-            if (result)
+            if (const auto result = omath::PePatternScanner::scan_for_pattern_in_loaded_module(ntdll, sig))
                 return reinterpret_cast<LdrpHandleTlsDataFn>(result.value());
-        }
 
-        throw std::runtime_error{"Failed to find LdrpHandleTlsData"};
+        return std::unexpected("Failed to find LdrpHandleTlsData");
     }
 
     [[nodiscard]]
-    RtlInsertInvertedFunctionTableFn find_rtl_insert_inverted_function_table()
+    std::expected<RtlInsertInvertedFunctionTableFn, std::string> find_rtl_insert_inverted_function_table()
     {
         constexpr std::array signatures = {
             "48 8B C4 48 89 58 ? 48 89 68 ? 48 89 70 ? 57 48 83 EC ? 83 60", // Windows 11 24H2
@@ -75,11 +73,11 @@ namespace
             if (const auto result = omath::PePatternScanner::scan_for_pattern_in_loaded_module(ntdll, sig))
                 return reinterpret_cast<RtlInsertInvertedFunctionTableFn>(result.value());
 
-        throw std::runtime_error{"Failed to find RtlInsertInvertedFunctionTable"};
+        return std::unexpected("Failed to find RtlInsertInvertedFunctionTable");
     }
     struct RemoteLoaderData final
     {
-        uint8_t* image_base;
+        std::uint8_t* image_base;
         DWORD nt_headers_rva;
 
         decltype(&LoadLibraryA) fn_load_library_a;
@@ -129,7 +127,7 @@ namespace
                     }
                     if (!fn)
                         return 2;
-                    first_trunk->u1.Function = reinterpret_cast<uintptr_t>(fn);
+                    first_trunk->u1.Function = reinterpret_cast<std::uintptr_t>(fn);
                     original_trunk++;
                     first_trunk++;
                 }
@@ -188,7 +186,7 @@ namespace
             {
                 data->fn_rtl_add_function_table(
                         reinterpret_cast<IMAGE_RUNTIME_FUNCTION_ENTRY*>(base + VirtualAddress),
-                        Size / sizeof(IMAGE_RUNTIME_FUNCTION_ENTRY), reinterpret_cast<uintptr_t>(base));
+                        Size / sizeof(IMAGE_RUNTIME_FUNCTION_ENTRY), reinterpret_cast<std::uintptr_t>(base));
             }
         }
 
@@ -212,7 +210,7 @@ namespace
 #pragma optimize("", on)
 #endif
     [[nodiscard]]
-    bool is_portable_executable(const std::span<uint8_t>& raw_dll)
+    bool is_portable_executable(const std::span<std::uint8_t>& raw_dll)
     {
         const auto dos_headers = reinterpret_cast<const IMAGE_DOS_HEADER*>(raw_dll.data());
 
@@ -224,12 +222,12 @@ namespace
         return nt_headers->FileHeader.Machine == IMAGE_FILE_MACHINE_AMD64;
     }
 
-    void relocate_for_base(uint8_t* local_image, const uintptr_t target_base)
+    void relocate_for_base(std::uint8_t* local_image, const std::uintptr_t target_base)
     {
         const auto* dos_headers = reinterpret_cast<IMAGE_DOS_HEADER*>(local_image);
         auto* nt_headers = reinterpret_cast<IMAGE_NT_HEADERS*>(local_image + dos_headers->e_lfanew);
 
-        const auto delta = static_cast<intptr_t>(target_base - nt_headers->OptionalHeader.ImageBase);
+        const auto delta = static_cast<std::intptr_t>(target_base - nt_headers->OptionalHeader.ImageBase);
         if (delta == 0)
             return;
 
@@ -241,16 +239,16 @@ namespace
         auto* block = reinterpret_cast<IMAGE_BASE_RELOCATION*>(local_image + relocation_directory.VirtualAddress);
         while (block->SizeOfBlock && block->VirtualAddress)
         {
-            const size_t count = (block->SizeOfBlock - sizeof(IMAGE_BASE_RELOCATION)) / sizeof(WORD);
-            auto* info = reinterpret_cast<uint16_t*>(block + 1);
-            for (size_t i = 0; i < count; i++, info++)
+            const std::size_t count = (block->SizeOfBlock - sizeof(IMAGE_BASE_RELOCATION)) / sizeof(WORD);
+            auto* info = reinterpret_cast<std::uint16_t*>(block + 1);
+            for (std::size_t i = 0; i < count; i++, info++)
             {
                 if (*info >> 0x0C != IMAGE_REL_BASED_DIR64)
                     continue;
-                auto* patch = reinterpret_cast<uintptr_t*>(local_image + block->VirtualAddress + (*info & 0xFFF));
+                auto* patch = reinterpret_cast<std::uintptr_t*>(local_image + block->VirtualAddress + (*info & 0xFFF));
                 *patch += delta;
             }
-            block = reinterpret_cast<IMAGE_BASE_RELOCATION*>(reinterpret_cast<uint8_t*>(block) + block->SizeOfBlock);
+            block = reinterpret_cast<IMAGE_BASE_RELOCATION*>(reinterpret_cast<std::uint8_t*>(block) + block->SizeOfBlock);
         }
 
         nt_headers->OptionalHeader.ImageBase = target_base;
@@ -300,24 +298,24 @@ namespace yail
                                              FALSE, static_cast<DWORD>(process_id));
 
         if (!process_handle)
-            return std::unexpected("Failed to open target process (error " + std::to_string(GetLastError()) + ")");
+            return std::unexpected(std::format("Failed to open target process (error {})", GetLastError()));
 
         const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(raw_dll.data());
         const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(raw_dll.data() + dos->e_lfanew);
         const std::size_t image_size = nt->OptionalHeader.SizeOfImage;
 
         // Allocate image memory in target process
-        auto* remote_image = static_cast<uint8_t*>(
+        auto* remote_image = static_cast<std::uint8_t*>(
                 VirtualAllocEx(process_handle, nullptr, image_size, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
 
         if (!remote_image)
         {
             CloseHandle(process_handle);
-            return std::unexpected("VirtualAllocEx failed for image (error " + std::to_string(GetLastError()) + ")");
+            return std::unexpected(std::format("VirtualAllocEx failed for image (error {})", GetLastError()));
         }
 
         // Prepare local copy: headers + sections
-        std::vector<uint8_t> local_image(image_size, 0);
+        std::vector<std::uint8_t> local_image(image_size, 0);
         std::copy_n(raw_dll.data(), nt->OptionalHeader.SizeOfHeaders, local_image.data());
 
         auto* section_header = IMAGE_FIRST_SECTION(nt);
@@ -330,7 +328,7 @@ namespace yail
         }
 
         // Relocate for remote base address
-        relocate_for_base(local_image.data(), reinterpret_cast<uintptr_t>(remote_image));
+        relocate_for_base(local_image.data(), reinterpret_cast<std::uintptr_t>(remote_image));
 
         // Write image to target
         if (!WriteProcessMemory(process_handle, remote_image, local_image.data(), image_size, nullptr))
@@ -343,14 +341,14 @@ namespace yail
         // Prepare shellcode page: [RemoteLoaderData | padding | shellcode bytes]
         const auto* shell_code_start = resolve_ilt(reinterpret_cast<void*>(&remote_shellcode));
         const auto* shell_code_end = resolve_ilt(reinterpret_cast<void*>(&remote_shellcode_end));
-        auto size_of_shell_code = static_cast<size_t>(shell_code_end - shell_code_start);
+        auto size_of_shell_code = static_cast<std::size_t>(shell_code_end - shell_code_start);
         if (size_of_shell_code < 0x100)
             size_of_shell_code = 0x1000; // safety floor
 
-        constexpr size_t data_aligned = (sizeof(RemoteLoaderData) + 0xF) & ~0xF;
-        const size_t total_shellcode = data_aligned + size_of_shell_code;
+        constexpr std::size_t data_aligned = (sizeof(RemoteLoaderData) + 0xF) & ~0xF;
+        const std::size_t total_shellcode = data_aligned + size_of_shell_code;
 
-        auto* remote_shellcode = static_cast<uint8_t*>(
+        auto* remote_shellcode = static_cast<std::uint8_t*>(
                 VirtualAllocEx(process_handle, nullptr, total_shellcode, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
 
         if (!remote_shellcode)
@@ -371,14 +369,28 @@ namespace yail
         loader_data.fn_load_library_a = LoadLibraryA;
         loader_data.fn_get_proc_address = GetProcAddress;
         loader_data.fn_rtl_add_function_table = RtlAddFunctionTable;
-        loader_data.fn_ldrp_handle_tls_data = reinterpret_cast<void*>(find_ldrp_handle_tls_data());
-        loader_data.fn_rtl_insert_inverted_function_table =
-                reinterpret_cast<void*>(find_rtl_insert_inverted_function_table());
+        const auto tls_fn = find_ldrp_handle_tls_data();
+        if (!tls_fn)
+        {
+            VirtualFreeEx(process_handle, remote_image, 0, MEM_RELEASE);
+            CloseHandle(process_handle);
+            return std::unexpected(tls_fn.error());
+        }
+        const auto inv_fn = find_rtl_insert_inverted_function_table();
+        if (!inv_fn)
+        {
+            VirtualFreeEx(process_handle, remote_image, 0, MEM_RELEASE);
+            CloseHandle(process_handle);
+            return std::unexpected(inv_fn.error());
+        }
+
+        loader_data.fn_ldrp_handle_tls_data = reinterpret_cast<void*>(tls_fn.value());
+        loader_data.fn_rtl_insert_inverted_function_table = reinterpret_cast<void*>(inv_fn.value());
 
         // Build local shellcode page
-        std::vector<uint8_t> shell_code_page(total_shellcode, 0);
-        std::memcpy(shell_code_page.data(), &loader_data, sizeof(loader_data));
-        std::memcpy(shell_code_page.data() + data_aligned, shell_code_start, size_of_shell_code);
+        std::vector<std::uint8_t> shell_code_page(total_shellcode, 0);
+        std::copy_n(reinterpret_cast<const std::uint8_t*>(&loader_data), sizeof(loader_data), shell_code_page.data());
+        std::copy_n(shell_code_start, size_of_shell_code, shell_code_page.data() + data_aligned);
 
         // Write shellcode page to target
         if (!WriteProcessMemory(process_handle, remote_shellcode, shell_code_page.data(), total_shellcode, nullptr))
@@ -401,7 +413,7 @@ namespace yail
             VirtualFreeEx(process_handle, remote_shellcode, 0, MEM_RELEASE);
             VirtualFreeEx(process_handle, remote_image, 0, MEM_RELEASE);
             CloseHandle(process_handle);
-            return std::unexpected("CreateRemoteThread failed (error " + std::to_string(GetLastError()) + ")");
+            return std::unexpected(std::format("CreateRemoteThread failed (error {})", GetLastError()));
         }
 
         WaitForSingleObject(thread_handle, INFINITE);
@@ -415,9 +427,9 @@ namespace yail
         CloseHandle(process_handle);
 
         if (exit_code != 0)
-            return std::unexpected("Remote shellcode failed (exit code " + std::to_string(exit_code) + ")");
+            return std::unexpected(std::format("Remote shellcode failed (exit code {})", exit_code));
 
-        return reinterpret_cast<uintptr_t>(remote_image);
+        return reinterpret_cast<std::uintptr_t>(remote_image);
     }
     std::expected<uintptr_t, std::string> manual_map_injection_from_raw(const std::span<std::uint8_t>& raw_dll,
                                                                         const std::string_view& process_name)
@@ -425,14 +437,14 @@ namespace yail
         const auto pid = get_process_id_by_name(process_name);
 
         if (!pid)
-            return std::unexpected("Process \"" + std::string(process_name) + "\" not found");
+            return std::unexpected(std::format("Process \"{}\" not found", process_name));
 
         return manual_map_injection_from_raw(raw_dll, pid.value());
     }
     std::expected<uintptr_t, std::string> manual_map_injection_from_file(const std::string_view& dll_path,
                                                                          const std::uintptr_t process_id)
     {
-        std::vector<uint8_t> data(std::filesystem::file_size(dll_path), 0);
+        std::vector<std::uint8_t> data(std::filesystem::file_size(dll_path), 0);
         std::ifstream file(std::filesystem::path{dll_path}, std::ios::binary);
         if (!file.is_open())
             return std::unexpected("Failed to open DLL file");
@@ -444,7 +456,7 @@ namespace yail
     std::expected<uintptr_t, std::string> manual_map_injection_from_file(const std::string_view& dll_path,
                                                                          const std::string_view& process_name)
     {
-        std::vector<uint8_t> data(std::filesystem::file_size(dll_path), 0);
+        std::vector<std::uint8_t> data(std::filesystem::file_size(dll_path), 0);
         std::ifstream file(std::filesystem::path{dll_path}, std::ios::binary);
         if (!file.is_open())
             return std::unexpected("Failed to open DLL file");
