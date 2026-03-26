@@ -10,6 +10,8 @@
 namespace
 {
     // Resolve MSVC incremental-link jump stubs (ILT): E9 xx xx xx xx → target
+
+    [[nodiscard]]
     uint8_t* resolve_ilt(void* fn)
     {
         auto* p = static_cast<uint8_t*>(fn);
@@ -214,11 +216,12 @@ namespace
         if (delta == 0)
             return;
 
-        auto& reloc_dir = nt_headers->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC];
-        if (!reloc_dir.Size)
+        // ReSharper disable once CppUseStructuredBinding
+        const auto& relocation_directory = nt_headers->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC];
+        if (!relocation_directory.Size)
             return;
 
-        auto* block = reinterpret_cast<IMAGE_BASE_RELOCATION*>(local_image + reloc_dir.VirtualAddress);
+        auto* block = reinterpret_cast<IMAGE_BASE_RELOCATION*>(local_image + relocation_directory.VirtualAddress);
         while (block->SizeOfBlock && block->VirtualAddress)
         {
             const size_t count = (block->SizeOfBlock - sizeof(IMAGE_BASE_RELOCATION)) / sizeof(WORD);
@@ -235,9 +238,11 @@ namespace
 
         nt_headers->OptionalHeader.ImageBase = target_base;
     }
+    [[nodiscard]]
     std::optional<std::uintptr_t> get_process_id_by_name(const std::string_view& process_name)
     {
-        const HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        // ReSharper disable once CppLocalVariableMayBeConst
+        HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
         if (snap == INVALID_HANDLE_VALUE)
             return 0;
 
@@ -249,7 +254,7 @@ namespace
         {
             do
             {
-                if (_stricmp(pe.szExeFile, process_name.data()) == 0)
+                if (std::string_view(pe.szExeFile) == process_name)
                 {
                     pid = pe.th32ProcessID;
                     break;
@@ -272,11 +277,12 @@ namespace yail
             return std::unexpected("File is not in a Portable Executable format");
 
         // Open target process
-        const HANDLE h_process = OpenProcess(PROCESS_VM_OPERATION | PROCESS_VM_WRITE | PROCESS_VM_READ
+        // ReSharper disable once CppLocalVariableMayBeConst
+        HANDLE process_handle = OpenProcess(PROCESS_VM_OPERATION | PROCESS_VM_WRITE | PROCESS_VM_READ
                                                      | PROCESS_CREATE_THREAD | PROCESS_QUERY_INFORMATION,
-                                             FALSE, process_id);
+                                             FALSE, static_cast<DWORD>(process_id));
 
-        if (!h_process)
+        if (!process_handle)
             return std::unexpected("Failed to open target process (error " + std::to_string(GetLastError()) + ")");
 
         const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(raw_dll.data());
@@ -285,11 +291,11 @@ namespace yail
 
         // Allocate image memory in target process
         auto* remote_image = static_cast<uint8_t*>(
-                VirtualAllocEx(h_process, nullptr, image_size, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+                VirtualAllocEx(process_handle, nullptr, image_size, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
 
         if (!remote_image)
         {
-            CloseHandle(h_process);
+            CloseHandle(process_handle);
             return std::unexpected("VirtualAllocEx failed for image (error " + std::to_string(GetLastError()) + ")");
         }
 
@@ -310,10 +316,10 @@ namespace yail
         relocate_for_base(local_image.data(), reinterpret_cast<uintptr_t>(remote_image));
 
         // Write image to target
-        if (!WriteProcessMemory(h_process, remote_image, local_image.data(), image_size, nullptr))
+        if (!WriteProcessMemory(process_handle, remote_image, local_image.data(), image_size, nullptr))
         {
-            VirtualFreeEx(h_process, remote_image, 0, MEM_RELEASE);
-            CloseHandle(h_process);
+            VirtualFreeEx(process_handle, remote_image, 0, MEM_RELEASE);
+            CloseHandle(process_handle);
             return std::unexpected("WriteProcessMemory failed for image");
         }
 
@@ -328,12 +334,12 @@ namespace yail
         const size_t total_shellcode = data_aligned + size_of_shell_code;
 
         auto* remote_shellcode = static_cast<uint8_t*>(
-                VirtualAllocEx(h_process, nullptr, total_shellcode, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+                VirtualAllocEx(process_handle, nullptr, total_shellcode, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
 
         if (!remote_shellcode)
         {
-            VirtualFreeEx(h_process, remote_image, 0, MEM_RELEASE);
-            CloseHandle(h_process);
+            VirtualFreeEx(process_handle, remote_image, 0, MEM_RELEASE);
+            CloseHandle(process_handle);
             return std::unexpected("VirtualAllocEx failed for shellcode");
         }
 
@@ -358,25 +364,26 @@ namespace yail
         std::memcpy(shell_code_page.data() + data_aligned, shell_code_start, size_of_shell_code);
 
         // Write shellcode page to target
-        if (!WriteProcessMemory(h_process, remote_shellcode, shell_code_page.data(), total_shellcode, nullptr))
+        if (!WriteProcessMemory(process_handle, remote_shellcode, shell_code_page.data(), total_shellcode, nullptr))
         {
-            VirtualFreeEx(h_process, remote_shellcode, 0, MEM_RELEASE);
-            VirtualFreeEx(h_process, remote_image, 0, MEM_RELEASE);
-            CloseHandle(h_process);
+            VirtualFreeEx(process_handle, remote_shellcode, 0, MEM_RELEASE);
+            VirtualFreeEx(process_handle, remote_image, 0, MEM_RELEASE);
+            CloseHandle(process_handle);
             return std::unexpected("WriteProcessMemory failed for shellcode");
         }
 
         // Create remote thread: entry = shellcode code, param = RemoteLoaderData*
-        const HANDLE thread_handle = CreateRemoteThread(
-                h_process, nullptr, 0, reinterpret_cast<LPTHREAD_START_ROUTINE>(remote_shellcode + data_aligned),
+        // ReSharper disable once CppLocalVariableMayBeConst
+        HANDLE thread_handle = CreateRemoteThread(
+                process_handle, nullptr, 0, reinterpret_cast<LPTHREAD_START_ROUTINE>(remote_shellcode + data_aligned),
                 remote_shellcode, // lpParameter → points to RemoteLoaderData
                 0, nullptr);
 
         if (!thread_handle)
         {
-            VirtualFreeEx(h_process, remote_shellcode, 0, MEM_RELEASE);
-            VirtualFreeEx(h_process, remote_image, 0, MEM_RELEASE);
-            CloseHandle(h_process);
+            VirtualFreeEx(process_handle, remote_shellcode, 0, MEM_RELEASE);
+            VirtualFreeEx(process_handle, remote_image, 0, MEM_RELEASE);
+            CloseHandle(process_handle);
             return std::unexpected("CreateRemoteThread failed (error " + std::to_string(GetLastError()) + ")");
         }
 
@@ -387,8 +394,8 @@ namespace yail
         CloseHandle(thread_handle);
 
         // Free shellcode page — no longer needed after init
-        VirtualFreeEx(h_process, remote_shellcode, 0, MEM_RELEASE);
-        CloseHandle(h_process);
+        VirtualFreeEx(process_handle, remote_shellcode, 0, MEM_RELEASE);
+        CloseHandle(process_handle);
 
         if (exit_code != 0)
             return std::unexpected("Remote shellcode failed (exit code " + std::to_string(exit_code) + ")");

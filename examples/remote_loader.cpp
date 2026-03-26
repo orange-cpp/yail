@@ -4,7 +4,7 @@
 
 int main(int argc, char* argv[])
 {
-    std::string dllPath = "test_dll.dll";
+    std::string dllPath = R"(C:\Users\orange\CLionProjects\wraith_tf2\out\Release\wraith.vmp.dll)";
     std::string target  = "tf_win64.exe";
 
     if (argc > 1) dllPath = argv[1];
