@@ -1,0 +1,20 @@
+{
+  "name": "yail",
+  "version": "0.0.1",
+  "description": "Yet Another Injection Library",
+  "homepage": "https://github.com/orange-cpp/yail",
+  "license": "Zlib",
+  "supports": "windows",
+  "dependencies": [
+    {
+      "name": "vcpkg-cmake",
+      "host": true
+    },
+    {
+      "name": "vcpkg-cmake-config",
+      "host": true
+    },
+    "orange-math"
+  ],
+  "builtin-baseline": "c27eeddba73f608f10605d80bc0144c1166f8fb7"
+}
