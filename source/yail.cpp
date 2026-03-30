@@ -46,11 +46,17 @@ namespace
     [[nodiscard]]
     std::expected<LdrpHandleTlsDataFn, std::string> find_ldrp_handle_tls_data()
     {
+#ifdef _WIN64
         constexpr std::array signatures = {
             "4C 8B DC 49 89 5B ? 49 89 73 ? 57 41 54 41 55 41 56 41 57 48 81 EC ? ? ? ? 48 8B 05 ? ? ? ? 48 33 C4 48 89 84 24 ? ? ? ? 48 8B F9", // Windows 11 24H2
             "48 89 5C 24 ? 48 89 74 24 ? 48 89 7C 24 ? 41 55 41 56 41 57 48 81 EC",
-
         };
+#else
+        constexpr std::array signatures = {
+            "8B FF 55 8B EC 83 EC ? A1 ? ? ? ? 53 57",
+            "55 8B EC 83 EC ? 53 56 57 8B 7D ? 8D",
+        };
+#endif
 
         const auto* ntdll = GetModuleHandleA("ntdll.dll");
         for (const auto* sig : signatures)
@@ -63,10 +69,17 @@ namespace
     [[nodiscard]]
     std::expected<RtlInsertInvertedFunctionTableFn, std::string> find_rtl_insert_inverted_function_table()
     {
+#ifdef _WIN64
         constexpr std::array signatures = {
             "48 8B C4 48 89 58 ? 48 89 68 ? 48 89 70 ? 57 48 83 EC ? 83 60", // Windows 11 24H2
             "4C 8B DC 49 89 5B ? 49 89 73 ? 57 48 83 EC ? 8B FA"
         };
+#else
+        constexpr std::array signatures = {
+            "8B FF 55 8B EC 56 68 ? ? ? ? FF 75 ? E8",
+            "55 8B EC 51 56 8B 75 ? 57 6A",
+        };
+#endif
 
         const auto* ntdll = GetModuleHandleA("ntdll.dll");
         for (const auto* sig : signatures)
@@ -82,7 +95,9 @@ namespace
 
         decltype(&LoadLibraryA) fn_load_library_a;
         decltype(&GetProcAddress) fn_get_proc_address;
+#ifdef _WIN64
         decltype(&RtlAddFunctionTable) fn_rtl_add_function_table;
+#endif
         decltype(&VirtualProtect) fn_virtual_protect;
         void* fn_ldrp_handle_tls_data;
         void* fn_rtl_insert_inverted_function_table;
@@ -218,22 +233,34 @@ namespace
         }
 
         // --- Exception handling ---
-        // ReSharper disable once CppTooWideScopeInitStatement
-        const auto& [VirtualAddress, Size] = nt_headers->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXCEPTION];
-        if (Size)
+#ifdef _WIN64
+        // x64: table-based exception handling via .pdata
         {
-            if (data->fn_rtl_insert_inverted_function_table)
+            // ReSharper disable once CppTooWideScopeInitStatement
+            const auto& [VirtualAddress, Size] = nt_headers->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXCEPTION];
+            if (Size)
             {
-                reinterpret_cast<void(NTAPI*)(PVOID, ULONG)>(data->fn_rtl_insert_inverted_function_table)(
-                        base, nt_headers->OptionalHeader.SizeOfImage);
-            }
-            else
-            {
-                data->fn_rtl_add_function_table(
-                        reinterpret_cast<IMAGE_RUNTIME_FUNCTION_ENTRY*>(base + VirtualAddress),
-                        Size / sizeof(IMAGE_RUNTIME_FUNCTION_ENTRY), reinterpret_cast<std::uintptr_t>(base));
+                if (data->fn_rtl_insert_inverted_function_table)
+                {
+                    reinterpret_cast<void(NTAPI*)(PVOID, ULONG)>(data->fn_rtl_insert_inverted_function_table)(
+                            base, nt_headers->OptionalHeader.SizeOfImage);
+                }
+                else
+                {
+                    data->fn_rtl_add_function_table(
+                            reinterpret_cast<IMAGE_RUNTIME_FUNCTION_ENTRY*>(base + VirtualAddress),
+                            Size / sizeof(IMAGE_RUNTIME_FUNCTION_ENTRY), reinterpret_cast<std::uintptr_t>(base));
+                }
             }
         }
+#else
+        // x86: frame-based SEH — register module for SafeSEH validation
+        if (data->fn_rtl_insert_inverted_function_table)
+        {
+            reinterpret_cast<void(NTAPI*)(PVOID, ULONG)>(data->fn_rtl_insert_inverted_function_table)(
+                    base, nt_headers->OptionalHeader.SizeOfImage);
+        }
+#endif
 
         // --- Apply per-section memory protections ---
         {
@@ -306,7 +333,11 @@ namespace
 
         const auto nt_headers = reinterpret_cast<const IMAGE_NT_HEADERS*>(raw_dll.data() + dos_headers->e_lfanew);
 
+#ifdef _WIN64
         return nt_headers->FileHeader.Machine == IMAGE_FILE_MACHINE_AMD64;
+#else
+        return nt_headers->FileHeader.Machine == IMAGE_FILE_MACHINE_I386;
+#endif
     }
 
     [[nodiscard]]
@@ -331,7 +362,11 @@ namespace
             auto* info = reinterpret_cast<std::uint16_t*>(block + 1);
             for (std::size_t i = 0; i < count; i++, info++)
             {
+#ifdef _WIN64
                 if (*info >> 0x0C != IMAGE_REL_BASED_DIR64)
+#else
+                if (*info >> 0x0C != IMAGE_REL_BASED_HIGHLOW)
+#endif
                     continue;
                 auto* patch = reinterpret_cast<std::uintptr_t*>(local_image + block->VirtualAddress + (*info & 0xFFF));
                 *patch += delta;
@@ -462,7 +497,9 @@ namespace yail
         loader_data.nt_headers_rva = static_cast<DWORD>(local_dos_header->e_lfanew);
         loader_data.fn_load_library_a = LoadLibraryA;
         loader_data.fn_get_proc_address = GetProcAddress;
+#ifdef _WIN64
         loader_data.fn_rtl_add_function_table = RtlAddFunctionTable;
+#endif
         loader_data.fn_virtual_protect = VirtualProtect;
         const auto tls_fn = find_ldrp_handle_tls_data();
         if (!tls_fn)
