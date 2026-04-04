@@ -436,8 +436,8 @@ namespace yail
         const auto* shell_code_start = resolve_ilt(reinterpret_cast<void*>(&remote_shellcode));
         const auto* shell_code_end = resolve_ilt(reinterpret_cast<void*>(&remote_shellcode_end));
         auto size_of_shell_code = static_cast<std::size_t>(shell_code_end - shell_code_start);
-        if (size_of_shell_code < 0x100)
-            size_of_shell_code = 0x1000; // safety floor
+        if (size_of_shell_code < 0x100 || size_of_shell_code > 0x1000)
+            size_of_shell_code = 2400; // safety floor
 
         constexpr std::size_t data_aligned = (sizeof(RemoteLoaderData) + 0xF) & ~0xF;
         const std::size_t total_shellcode = data_aligned + size_of_shell_code;
