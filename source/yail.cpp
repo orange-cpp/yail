@@ -53,8 +53,7 @@ namespace
         };
 #else
         constexpr std::array signatures = {
-            "8B FF 55 8B EC 83 EC ? A1 ? ? ? ? 53 57",
-            "55 8B EC 83 EC ? 53 56 57 8B 7D ? 8D",
+            "6A ? 68 ? ? ? ? E8 ? ? ? ? 8B C1 89 45 ? 89 45",
         };
 #endif
 
@@ -76,8 +75,7 @@ namespace
         };
 #else
         constexpr std::array signatures = {
-            "8B FF 55 8B EC 56 68 ? ? ? ? FF 75 ? E8",
-            "55 8B EC 51 56 8B 75 ? 57 6A",
+            "8B FF 55 8B EC 83 EC ? 53 56 57 8D 45 ? 8B FA 50 8D 55",
         };
 #endif
 
@@ -200,26 +198,29 @@ namespace
         const auto& tls_directory = nt_headers->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_TLS];
         if (tls_directory.Size && data->fn_ldrp_handle_tls_data)
         {
-            // Build fake LDR_DATA_TABLE_ENTRY on the stack — zero without memset
-            LdrDataTableEntryFull entry;
-            auto* raw = reinterpret_cast<volatile uint8_t*>(&entry);
-            for (size_t i = 0; i < sizeof(entry); i++)
-                raw[i] = 0;
+            // Build fake LDR_DATA_TABLE_ENTRY on the stack.
+            // Use a large zeroed buffer because LdrpHandleTlsData may access
+            // fields far beyond our known struct layout (the real struct is ~600 bytes on Win11).
+            volatile std::uint8_t entry_buf[0x400];
+            for (size_t i = 0; i < sizeof(entry_buf); i++)
+                entry_buf[i] = 0;
 
-            entry.dll_base = base;
-            entry.size_of_image = nt_headers->OptionalHeader.SizeOfImage;
-            entry.entry_point = base + nt_headers->OptionalHeader.AddressOfEntryPoint;
+            auto* entry = reinterpret_cast<LdrDataTableEntryFull*>(const_cast<std::uint8_t*>(entry_buf));
 
-            entry.in_load_order_links.Flink = &entry.in_load_order_links;
-            entry.in_load_order_links.Blink = &entry.in_load_order_links;
-            entry.in_memory_order_links.Flink = &entry.in_memory_order_links;
-            entry.in_memory_order_links.Blink = &entry.in_memory_order_links;
-            entry.in_initialization_order_links.Flink = &entry.in_initialization_order_links;
-            entry.in_initialization_order_links.Blink = &entry.in_initialization_order_links;
-            entry.hash_links.Flink = &entry.hash_links;
-            entry.hash_links.Blink = &entry.hash_links;
+            entry->dll_base = base;
+            entry->size_of_image = nt_headers->OptionalHeader.SizeOfImage;
+            entry->entry_point = base + nt_headers->OptionalHeader.AddressOfEntryPoint;
 
-            (reinterpret_cast<NTSTATUS(NTAPI*)(LdrDataTableEntryFull*)>(data->fn_ldrp_handle_tls_data)(&entry));
+            entry->in_load_order_links.Flink = &entry->in_load_order_links;
+            entry->in_load_order_links.Blink = &entry->in_load_order_links;
+            entry->in_memory_order_links.Flink = &entry->in_memory_order_links;
+            entry->in_memory_order_links.Blink = &entry->in_memory_order_links;
+            entry->in_initialization_order_links.Flink = &entry->in_initialization_order_links;
+            entry->in_initialization_order_links.Blink = &entry->in_initialization_order_links;
+            entry->hash_links.Flink = &entry->hash_links;
+            entry->hash_links.Blink = &entry->hash_links;
+
+            (reinterpret_cast<NTSTATUS(NTAPI*)(LdrDataTableEntryFull*)>(data->fn_ldrp_handle_tls_data)(entry));
         }
 
         // --- TLS callbacks ---
@@ -576,7 +577,7 @@ namespace yail
     std::expected<uintptr_t, std::string> manual_map_injection_from_file(const std::string_view& dll_path,
                                                                          const std::uintptr_t process_id)
     {
-        std::vector<std::uint8_t> data(std::filesystem::file_size(dll_path), 0);
+        std::vector<std::uint8_t> data(static_cast<std::size_t>(std::filesystem::file_size(dll_path)), 0);
         std::ifstream file(std::filesystem::path{dll_path}, std::ios::binary);
         if (!file.is_open())
             return std::unexpected("Failed to open DLL file");
@@ -588,7 +589,7 @@ namespace yail
     std::expected<uintptr_t, std::string> manual_map_injection_from_file(const std::string_view& dll_path,
                                                                          const std::string_view& process_name)
     {
-        std::vector<std::uint8_t> data(std::filesystem::file_size(dll_path), 0);
+        std::vector<std::uint8_t> data(static_cast<std::size_t>(std::filesystem::file_size(dll_path)), 0);
         std::ifstream file(std::filesystem::path{dll_path}, std::ios::binary);
         if (!file.is_open())
             return std::unexpected("Failed to open DLL file");
