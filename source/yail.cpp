@@ -319,9 +319,21 @@ namespace
         // --- Call entry point ---
         if (nt_headers->OptionalHeader.AddressOfEntryPoint)
         {
-            const auto entry_point = reinterpret_cast<BOOL(WINAPI*)(HMODULE, DWORD, LPVOID)>(
-                    base + nt_headers->OptionalHeader.AddressOfEntryPoint);
-            entry_point(reinterpret_cast<HMODULE>(base), DLL_PROCESS_ATTACH, nullptr);
+            if (nt_headers->FileHeader.Characteristics & IMAGE_FILE_DLL)
+            {
+                const auto entry_point = reinterpret_cast<BOOL(WINAPI*)(HMODULE, DWORD, LPVOID)>(
+                        base + nt_headers->OptionalHeader.AddressOfEntryPoint);
+                entry_point(reinterpret_cast<HMODULE>(base), DLL_PROCESS_ATTACH, nullptr);
+            }
+            else
+            {
+                // EXE entry (mainCRTStartup / WinMainCRTStartup) — __cdecl, no args.
+                // When the entry returns the CRT calls exit() → ExitProcess, terminating
+                // the host process. GetModuleHandle(NULL) still resolves to the host EXE.
+                const auto entry_point = reinterpret_cast<int(__cdecl*)()>(
+                        base + nt_headers->OptionalHeader.AddressOfEntryPoint);
+                entry_point();
+            }
         }
 
         return 0;

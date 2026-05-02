@@ -40,6 +40,18 @@ if (YAIL_BUILD_EXAMPLES)
     set_target_properties(test_dll PROPERTIES CXX_STANDARD 23)
     target_link_libraries(test_dll PRIVATE yail dbghelp winmm delayimp)
     target_link_options(test_dll PRIVATE /DELAYLOAD:dbghelp.dll /DELAYLOAD:winmm.dll)
+
+    add_executable(test_exe examples/test_exe.cpp)
+    set_target_properties(test_exe PROPERTIES CXX_STANDARD 23)
+    target_link_libraries(test_exe PRIVATE dbghelp winmm delayimp)
+    target_link_options(test_exe PRIVATE /DELAYLOAD:dbghelp.dll /DELAYLOAD:winmm.dll)
+
+    add_executable(test_winexe examples/test_winexe.cpp)
+    set_target_properties(test_winexe PROPERTIES CXX_STANDARD 23)
+    target_link_libraries(test_winexe PRIVATE dbghelp delayimp)
+    # /SUBSYSTEM:WINDOWS makes the linker pick WinMainCRTStartup as the entry,
+    # which the CRT uses to dispatch to WinMain (instead of main).
+    target_link_options(test_winexe PRIVATE /SUBSYSTEM:WINDOWS /DELAYLOAD:dbghelp.dll)
 endif()
 
 

@@ -4,8 +4,8 @@
 #include <string>
 #include <print>
 int main(int argc, char* argv[])
-{
-    std::string dllPath = "test_dll.dll";
+
+    std::string dllPath = "test_winexe.exe";
     if (argc > 1)
         dllPath = argv[1];
 
