@@ -1,6 +1,4 @@
-# yail
-**Yet Another Injection Library** — a Windows manual-map PE injection library written in modern C++23. Supports both **x64** and **x86**, and can map both **DLLs** and **EXEs** into a target process.
-
+![banner](.github/banner.png)
 ## Features
 
 - Manual PE mapping (no `LoadLibrary` traces)
