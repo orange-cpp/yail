@@ -40,12 +40,13 @@ namespace
         LIST_ENTRY hash_links;
         [[maybe_unused]] ULONG time_date_stamp;
     };
-    using LdrpHandleTlsDataFn = NTSTATUS(NTAPI*)(LdrDataTableEntryFull*);
 #ifdef _WIN64
+    using LdrpHandleTlsDataFn = NTSTATUS(NTAPI*)(LdrDataTableEntryFull*);
     using RtlInsertInvertedFunctionTableFn = void(NTAPI*)(PVOID image_base, ULONG size_of_image);
 #else
-    // Modern x86 ntdll uses __fastcall for this internal function despite the
-    // legacy `_Name@8` symbol decoration — args come in ECX/EDX, not on the stack.
+    // Modern x86 ntdll uses __fastcall for these internal functions despite the
+    // legacy `_Name@N` symbol decoration — args come in ECX/EDX, not on the stack.
+    using LdrpHandleTlsDataFn = NTSTATUS(__fastcall*)(LdrDataTableEntryFull*);
     using RtlInsertInvertedFunctionTableFn = void(__fastcall*)(PVOID image_base, ULONG size_of_image);
 #endif
 
@@ -226,7 +227,11 @@ namespace
             entry.hash_links.Flink = &entry.hash_links;
             entry.hash_links.Blink = &entry.hash_links;
 
+#ifdef _WIN64
             (reinterpret_cast<NTSTATUS(NTAPI*)(LdrDataTableEntryFull*)>(data->fn_ldrp_handle_tls_data)(&entry));
+#else
+            (reinterpret_cast<NTSTATUS(__fastcall*)(LdrDataTableEntryFull*)>(data->fn_ldrp_handle_tls_data)(&entry));
+#endif
         }
 
         // --- TLS callbacks ---
