@@ -41,15 +41,27 @@ namespace
         [[maybe_unused]] ULONG time_date_stamp;
     };
     using LdrpHandleTlsDataFn = NTSTATUS(NTAPI*)(LdrDataTableEntryFull*);
+#ifdef _WIN64
     using RtlInsertInvertedFunctionTableFn = void(NTAPI*)(PVOID image_base, ULONG size_of_image);
+#else
+    // Modern x86 ntdll uses __fastcall for this internal function despite the
+    // legacy `_Name@8` symbol decoration — args come in ECX/EDX, not on the stack.
+    using RtlInsertInvertedFunctionTableFn = void(__fastcall*)(PVOID image_base, ULONG size_of_image);
+#endif
 
     [[nodiscard]]
     std::expected<LdrpHandleTlsDataFn, std::string> find_ldrp_handle_tls_data()
     {
         constexpr std::array signatures = {
+#ifdef _WIN64
             "4C 8B DC 49 89 5B ? 49 89 73 ? 57 41 54 41 55 41 56 41 57 48 81 EC ? ? ? ? 48 8B 05 ? ? ? ? 48 33 C4 48 89 84 24 ? ? ? ? 48 8B F9", // Windows 11 24H2
             "48 89 5C 24 ? 48 89 74 24 ? 48 89 7C 24 ? 41 55 41 56 41 57 48 81 EC",
-
+#else
+            // x86 — patterns may need updating per Windows build
+            "8B FF 55 8B EC 83 EC ? 53 56 57 8B 7D ? 89 4D",
+            "8B FF 55 8B EC 51 51 53 56 57 8B F1 89 75",
+            "6A ? 68 ? ? ? ? E8 ? ? ? ? 8B C1 89 45 ? 89 45",
+#endif
         };
 
         const auto* ntdll = GetModuleHandleA("ntdll.dll");
@@ -64,8 +76,16 @@ namespace
     std::expected<RtlInsertInvertedFunctionTableFn, std::string> find_rtl_insert_inverted_function_table()
     {
         constexpr std::array signatures = {
+#ifdef _WIN64
             "48 8B C4 48 89 58 ? 48 89 68 ? 48 89 70 ? 57 48 83 EC ? 83 60", // Windows 11 24H2
             "4C 8B DC 49 89 5B ? 49 89 73 ? 57 48 83 EC ? 8B FA"
+#else
+            // x86 — patterns may need updating per Windows build.
+            // Win11 24H2 x86 ntdll: __fastcall convention (ECX/EDX), see typedef above.
+            "8B FF 55 8B EC 83 EC ? 53 56 57 8D 45 ? 8B FA 50 8D 55", // Win11 24H2
+            "8B FF 55 8B EC 51 51 53 56 57 8B 7D ? 8D 45",
+            "8B FF 55 8B EC 53 56 57 8B 7D ? 8D 45",
+#endif
         };
 
         const auto* ntdll = GetModuleHandleA("ntdll.dll");
@@ -82,7 +102,9 @@ namespace
 
         decltype(&LoadLibraryA) fn_load_library_a;
         decltype(&GetProcAddress) fn_get_proc_address;
+#ifdef _WIN64
         decltype(&RtlAddFunctionTable) fn_rtl_add_function_table;
+#endif
         decltype(&VirtualProtect) fn_virtual_protect;
         void* fn_ldrp_handle_tls_data;
         void* fn_rtl_insert_inverted_function_table;
@@ -217,7 +239,8 @@ namespace
                 (*call_backs_addr)(base, DLL_PROCESS_ATTACH, nullptr);
         }
 
-        // --- Exception handling ---
+#ifdef _WIN64
+        // --- Exception handling (x64 unwind tables) ---
         // ReSharper disable once CppTooWideScopeInitStatement
         const auto& [VirtualAddress, Size] = nt_headers->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXCEPTION];
         if (Size)
@@ -234,6 +257,17 @@ namespace
                         Size / sizeof(IMAGE_RUNTIME_FUNCTION_ENTRY), reinterpret_cast<std::uintptr_t>(base));
             }
         }
+#else
+        // x86: register module in the inverted function table so RtlIsValidHandler accepts
+        // SEH/C++ handlers from this image. Without this, exception dispatch rejects every
+        // handler in a manually-mapped DLL and unwinds straight to process termination.
+        // Modern x86 ntdll passes args in ECX/EDX (__fastcall), not on the stack.
+        if (data->fn_rtl_insert_inverted_function_table)
+        {
+            reinterpret_cast<void(__fastcall*)(PVOID, ULONG)>(data->fn_rtl_insert_inverted_function_table)(
+                    base, nt_headers->OptionalHeader.SizeOfImage);
+        }
+#endif
 
         // --- Apply per-section memory protections ---
         {
@@ -306,7 +340,12 @@ namespace
 
         const auto nt_headers = reinterpret_cast<const IMAGE_NT_HEADERS*>(raw_dll.data() + dos_headers->e_lfanew);
 
-        return nt_headers->FileHeader.Machine == IMAGE_FILE_MACHINE_AMD64;
+#ifdef _WIN64
+        constexpr WORD expected_machine = IMAGE_FILE_MACHINE_AMD64;
+#else
+        constexpr WORD expected_machine = IMAGE_FILE_MACHINE_I386;
+#endif
+        return nt_headers->FileHeader.Machine == expected_machine;
     }
 
     [[nodiscard]]
@@ -329,9 +368,14 @@ namespace
         {
             const std::size_t count = (block->SizeOfBlock - sizeof(IMAGE_BASE_RELOCATION)) / sizeof(WORD);
             auto* info = reinterpret_cast<std::uint16_t*>(block + 1);
+#ifdef _WIN64
+            constexpr WORD reloc_entry_type = IMAGE_REL_BASED_DIR64;
+#else
+            constexpr WORD reloc_entry_type = IMAGE_REL_BASED_HIGHLOW;
+#endif
             for (std::size_t i = 0; i < count; i++, info++)
             {
-                if (*info >> 0x0C != IMAGE_REL_BASED_DIR64)
+                if (*info >> 0x0C != reloc_entry_type)
                     continue;
                 auto* patch = reinterpret_cast<std::uintptr_t*>(local_image + block->VirtualAddress + (*info & 0xFFF));
                 *patch += delta;
@@ -462,7 +506,9 @@ namespace yail
         loader_data.nt_headers_rva = static_cast<DWORD>(local_dos_header->e_lfanew);
         loader_data.fn_load_library_a = LoadLibraryA;
         loader_data.fn_get_proc_address = GetProcAddress;
+#ifdef _WIN64
         loader_data.fn_rtl_add_function_table = RtlAddFunctionTable;
+#endif
         loader_data.fn_virtual_protect = VirtualProtect;
         const auto tls_fn = find_ldrp_handle_tls_data();
         if (!tls_fn)
@@ -471,16 +517,20 @@ namespace yail
             CloseHandle(process_handle);
             return std::unexpected(tls_fn.error());
         }
-        const auto inv_fn = find_rtl_insert_inverted_function_table();
-        if (!inv_fn)
+        loader_data.fn_ldrp_handle_tls_data = reinterpret_cast<void*>(tls_fn.value());
+        // RtlInsertInvertedFunctionTable is required on x64 (unwind tables) but optional on
+        // x86 — without it, manually-mapped DLLs that throw will crash on dispatch, but DLLs
+        // that don't throw load fine. Treat lookup failure as fatal only on x64.
+        if (const auto inv_fn = find_rtl_insert_inverted_function_table())
+            loader_data.fn_rtl_insert_inverted_function_table = reinterpret_cast<void*>(inv_fn.value());
+#ifdef _WIN64
+        else
         {
             VirtualFreeEx(process_handle, remote_image, 0, MEM_RELEASE);
             CloseHandle(process_handle);
             return std::unexpected(inv_fn.error());
         }
-
-        loader_data.fn_ldrp_handle_tls_data = reinterpret_cast<void*>(tls_fn.value());
-        loader_data.fn_rtl_insert_inverted_function_table = reinterpret_cast<void*>(inv_fn.value());
+#endif
 
         // Build local shellcode page
         std::vector<std::uint8_t> shell_code_page(total_shellcode, 0);
@@ -539,7 +589,7 @@ namespace yail
     std::expected<uintptr_t, std::string> manual_map_injection_from_file(const std::string_view& dll_path,
                                                                          const std::uintptr_t process_id)
     {
-        std::vector<std::uint8_t> data(std::filesystem::file_size(dll_path), 0);
+        std::vector<std::uint8_t> data(static_cast<std::size_t>(std::filesystem::file_size(dll_path)), 0);
         std::ifstream file(std::filesystem::path{dll_path}, std::ios::binary);
         if (!file.is_open())
             return std::unexpected("Failed to open DLL file");
@@ -551,7 +601,7 @@ namespace yail
     std::expected<uintptr_t, std::string> manual_map_injection_from_file(const std::string_view& dll_path,
                                                                          const std::string_view& process_name)
     {
-        std::vector<std::uint8_t> data(std::filesystem::file_size(dll_path), 0);
+        std::vector<std::uint8_t> data(static_cast<std::size_t>(std::filesystem::file_size(dll_path)), 0);
         std::ifstream file(std::filesystem::path{dll_path}, std::ios::binary);
         if (!file.is_open())
             return std::unexpected("Failed to open DLL file");

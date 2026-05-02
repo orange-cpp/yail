@@ -41,7 +41,11 @@ static void NTAPI TlsCallback(PVOID hModule, DWORD dwReason, PVOID pContext)
 }
 
 #ifdef _MSC_VER
+#ifdef _WIN64
 #pragma comment(linker, "/INCLUDE:_tls_used")
+#else
+#pragma comment(linker, "/INCLUDE:__tls_used")
+#endif
 #pragma section(".CRT$XLB", read)
 __declspec(allocate(".CRT$XLB")) PIMAGE_TLS_CALLBACK g_pfnTlsCallback = TlsCallback;
 #else
