@@ -79,7 +79,8 @@ namespace
         constexpr std::array signatures = {
 #ifdef _WIN64
             "48 8B C4 48 89 58 ? 48 89 68 ? 48 89 70 ? 57 48 83 EC ? 83 60", // Windows 11 24H2
-            "4C 8B DC 49 89 5B ? 49 89 73 ? 57 48 83 EC ? 8B FA"
+            "4C 8B DC 49 89 5B ? 49 89 73 ? 57 48 83 EC ? 8B FA",
+            "48 89 5C 24 ? 57 48 83 EC ? 8B DA 4C 8D 44 24" // win11 23h2
 #else
             // x86 — patterns may need updating per Windows build.
             // Win11 24H2 x86 ntdll: __fastcall convention (ECX/EDX), see typedef above.
