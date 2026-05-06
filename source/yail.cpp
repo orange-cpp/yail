@@ -57,12 +57,12 @@ namespace
 #ifdef _WIN64
             "4C 8B DC 49 89 5B ? 49 89 73 ? 57 41 54 41 55 41 56 41 57 48 81 EC ? ? ? ? 48 8B 05 ? ? ? ? 48 33 C4 48 89 84 24 ? ? ? ? 48 8B F9", // Windows 11 24H2
             "48 89 5C 24 ? 48 89 74 24 ? 48 89 7C 24 ? 41 55 41 56 41 57 48 81 EC",
-            "48 89 5C 24 ? 48 89 74 24 ? 48 89 7C 24 ? 41 54 41 56 41 57 48 81 EC ? ? ? ? 48 8B 05 ? ? ? ? 48 33 C4 48 89 84 24 ? ? ? ? 48 8B C1", // win10 22h2 i believe
+            "48 89 5C 24 ? 48 89 74 24 ? 48 89 7C 24 ? 41 54 41 56 41 57 48 81 EC ? ? ? ? 48 8B 05 ? ? ? ? 48 33 C4 48 89 84 24 ? ? ? ? 48 8B C1" // win10 22h2 i believe
 #else
             // x86 — patterns may need updating per Windows build
             "8B FF 55 8B EC 83 EC ? 53 56 57 8B 7D ? 89 4D",
             "8B FF 55 8B EC 51 51 53 56 57 8B F1 89 75",
-            "6A ? 68 ? ? ? ? E8 ? ? ? ? 8B C1 89 45 ? 89 45",
+            "6A ? 68 ? ? ? ? E8 ? ? ? ? 8B C1 89 45 ? 89 45"
 #endif
         };
 
@@ -81,7 +81,7 @@ namespace
 #ifdef _WIN64
             "48 8B C4 48 89 58 ? 48 89 68 ? 48 89 70 ? 57 48 83 EC ? 83 60", // Windows 11 24H2
             "4C 8B DC 49 89 5B ? 49 89 73 ? 57 48 83 EC ? 8B FA",
-            "48 89 5C 24 ? 57 48 83 EC ? 8B DA 4C 8D 44 24", // win11 23h2
+            "48 89 5C 24 ? 57 48 83 EC ? 8B DA 4C 8D 44 24" // win11 23h2
 #else
             // x86 — patterns may need updating per Windows build.
             // Win11 24H2 x86 ntdll: __fastcall convention (ECX/EDX), see typedef above.
