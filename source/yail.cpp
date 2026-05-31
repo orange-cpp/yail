@@ -117,7 +117,9 @@ namespace
 #pragma optimize("ts", on)
 #pragma strict_gs_check(push, off)
 #endif
-    __declspec(safebuffers) __declspec(noinline) DWORD WINAPI remote_shellcode(const RemoteLoaderData* data)
+    // Ordered COFF subsections keep the end marker adjacent after linking.
+    __declspec(safebuffers) __declspec(noinline) __declspec(code_seg(".text$yail_shellcode$a")) DWORD WINAPI
+    remote_shellcode(const RemoteLoaderData* data)
     {
         auto* base = data->image_base;
         auto* nt_headers = reinterpret_cast<IMAGE_NT_HEADERS*>(base + data->nt_headers_rva);
@@ -338,7 +340,7 @@ namespace
 
         return 0;
     }
-    void remote_shellcode_end()
+    __declspec(noinline) __declspec(code_seg(".text$yail_shellcode$z")) void remote_shellcode_end()
     {
     }
 
@@ -495,10 +497,16 @@ namespace yail
 
         // Prepare shellcode page: [RemoteLoaderData | padding | shellcode bytes]
         const auto* shell_code_start = resolve_ilt(reinterpret_cast<void*>(&remote_shellcode));
-        const auto* shell_code_end = resolve_ilt(reinterpret_cast<void*>(&remote_shellcode_end));
-        auto size_of_shell_code = static_cast<std::size_t>(shell_code_end - shell_code_start);
-        if (size_of_shell_code < 0x100 || size_of_shell_code > 0x1000)
-            size_of_shell_code = 2400; // safety floor
+        const auto shell_code_start_address = reinterpret_cast<std::uintptr_t>(shell_code_start);
+        const auto shell_code_end_address =
+                reinterpret_cast<std::uintptr_t>(resolve_ilt(reinterpret_cast<void*>(&remote_shellcode_end)));
+        if (shell_code_end_address <= shell_code_start_address)
+        {
+            VirtualFreeEx(process_handle, remote_image, 0, MEM_RELEASE);
+            CloseHandle(process_handle);
+            return std::unexpected("Invalid shellcode section layout");
+        }
+        const auto size_of_shell_code = shell_code_end_address - shell_code_start_address;
 
         constexpr std::size_t data_aligned = (sizeof(RemoteLoaderData) + 0xF) & ~0xF;
         const std::size_t total_shellcode = data_aligned + size_of_shell_code;
@@ -606,6 +614,8 @@ namespace yail
     std::expected<uintptr_t, std::string> manual_map_injection_from_file(const std::string_view& dll_path,
                                                                          const std::uintptr_t process_id)
     {
+        if (!std::filesystem::exists(dll_path))
+            return std::unexpected("File does not exists.");
         std::vector<std::uint8_t> data(static_cast<std::size_t>(std::filesystem::file_size(dll_path)), 0);
         std::ifstream file(std::filesystem::path{dll_path}, std::ios::binary);
         if (!file.is_open())
