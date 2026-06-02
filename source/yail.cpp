@@ -1042,7 +1042,7 @@ namespace
 
 namespace yail
 {
-    std::expected<uintptr_t, std::string> manual_map_injection_from_raw(const std::span<std::uint8_t>& raw_dll,
+    std::expected<std::uintptr_t, std::string> manual_map_injection_from_raw(const std::span<std::uint8_t>& raw_dll,
                                                                         const std::uintptr_t process_id)
     {
         const auto pe_machine = get_pe_machine(raw_dll);
@@ -1214,7 +1214,7 @@ namespace yail
 
         return reinterpret_cast<std::uintptr_t>(remote_image);
     }
-    std::expected<uintptr_t, std::string> manual_map_injection_from_raw(const std::span<std::uint8_t>& raw_dll,
+    std::expected<std::uintptr_t, std::string> manual_map_injection_from_raw(const std::span<std::uint8_t>& raw_dll,
                                                                         const std::string_view& process_name)
     {
         const auto pid = get_process_id_by_name(process_name);
@@ -1224,7 +1224,7 @@ namespace yail
 
         return manual_map_injection_from_raw(raw_dll, pid.value());
     }
-    std::expected<uintptr_t, std::string> manual_map_injection_from_file(const std::string_view& dll_path,
+    std::expected<std::uintptr_t, std::string> manual_map_injection_from_file(const std::string_view& dll_path,
                                                                          const std::uintptr_t process_id)
     {
         if (!std::filesystem::exists(dll_path))
@@ -1238,7 +1238,7 @@ namespace yail
 
         return manual_map_injection_from_raw({data.data(), data.size()}, process_id);
     }
-    std::expected<uintptr_t, std::string> manual_map_injection_from_file(const std::string_view& dll_path,
+    std::expected<std::uintptr_t, std::string> manual_map_injection_from_file(const std::string_view& dll_path,
                                                                          const std::string_view& process_name)
     {
         std::vector<std::uint8_t> data(static_cast<std::size_t>(std::filesystem::file_size(dll_path)), 0);
