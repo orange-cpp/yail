@@ -311,7 +311,7 @@ namespace yail::detail
                 return std::unexpected(read.error());
 
             constexpr std::array<std::uint8_t, 5> text_name{'.', 't', 'e', 'x', 't'};
-            const auto section = std::find_if(sections.begin(), sections.end(), [&](const IMAGE_SECTION_HEADER& candidate)
+            const auto section = std::ranges::find_if(sections, [&](const IMAGE_SECTION_HEADER& candidate)
             {
                 return std::equal(text_name.begin(), text_name.end(), candidate.Name);
             });
