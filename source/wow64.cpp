@@ -10,13 +10,14 @@
 #include <cstring>
 #include <format>
 #include <limits>
+#include <omath/utility/pattern_scan.hpp>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
+#include <yail/detail/pe.hpp>
 #include <yail/detail/process.hpp>
 #include <yail/detail/shellcode.hpp>
-#include <omath/utility/pattern_scan.hpp>
 
 namespace yail::detail
 {
@@ -26,13 +27,16 @@ namespace yail::detail
         {
             std::uint32_t image_base;
             DWORD nt_headers_rva;
+            DWORD original_size_of_image;
+            DWORD original_number_of_rva_and_sizes;
+            IMAGE_DATA_DIRECTORY original_load_config;
             std::uint32_t fn_load_library_a;
             std::uint32_t fn_get_proc_address;
             std::uint32_t fn_virtual_protect;
             std::uint32_t fn_ldrp_handle_tls_data;
             std::uint32_t fn_rtl_insert_inverted_function_table;
         };
-        static_assert(sizeof(Wow64RemoteLoaderData) == 28);
+        static_assert(sizeof(Wow64RemoteLoaderData) == 44);
 
         [[nodiscard]]
         bool relocate_wow64_image_for_base(std::uint8_t* local_image, const std::uint32_t target_base)
@@ -366,8 +370,12 @@ namespace yail::detail
 
         const auto* dos_headers = reinterpret_cast<const IMAGE_DOS_HEADER*>(raw_pe.data());
         const auto* nt_headers = reinterpret_cast<const IMAGE_NT_HEADERS32*>(raw_pe.data() + dos_headers->e_lfanew);
-        const std::size_t image_size = nt_headers->OptionalHeader.SizeOfImage;
-        auto* remote_image = static_cast<std::uint8_t*>(VirtualAllocEx(
+        const auto safe_seh_layout = plan_x86_safe_seh(raw_pe);
+        if (!safe_seh_layout)
+            return std::unexpected(safe_seh_layout.error());
+        const std::size_t image_size = safe_seh_layout->expanded_size_of_image;
+
+        auto* const remote_image = static_cast<std::uint8_t*>(VirtualAllocEx(
                 process_handle.get(), nullptr, image_size, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
         if (!remote_image)
             return std::unexpected(std::format("VirtualAllocEx failed for WOW64 image (error {})", GetLastError()));
@@ -379,7 +387,7 @@ namespace yail::detail
         };
 
         const auto remote_image_address = reinterpret_cast<std::uintptr_t>(remote_image);
-        if (remote_image_address > std::numeric_limits<std::uint32_t>::max())
+        if (remote_image_address > std::numeric_limits<std::uint32_t>::max() - image_size)
             return fail_image("WOW64 image allocation is above the 32-bit address range");
 
         std::vector<std::uint8_t> local_image(image_size, 0);
@@ -395,12 +403,16 @@ namespace yail::detail
 
         if (!relocate_wow64_image_for_base(local_image.data(), static_cast<std::uint32_t>(remote_image_address)))
             return fail_image("WOW64 image requires relocation but has no relocation directory");
+        write_x86_safe_seh(local_image.data(), remote_image_address, *safe_seh_layout);
         if (!WriteProcessMemory(process_handle.get(), remote_image, local_image.data(), image_size, nullptr))
             return fail_image(std::format("WriteProcessMemory failed for WOW64 image (error {})", GetLastError()));
 
         Wow64RemoteLoaderData loader_data{};
         loader_data.image_base = static_cast<std::uint32_t>(remote_image_address);
         loader_data.nt_headers_rva = static_cast<DWORD>(dos_headers->e_lfanew);
+        loader_data.original_size_of_image = safe_seh_layout->original_size_of_image;
+        loader_data.original_number_of_rva_and_sizes = safe_seh_layout->original_number_of_rva_and_sizes;
+        loader_data.original_load_config = safe_seh_layout->original_load_config;
 
         const auto load_library_a = resolve_wow64_export(process_handle.get(), static_cast<DWORD>(process_id),
                                                          "kernel32.dll", "LoadLibraryA");

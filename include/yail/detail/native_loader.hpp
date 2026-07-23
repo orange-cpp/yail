@@ -10,6 +10,11 @@ namespace yail::detail
     {
         std::uint8_t* image_base;
         DWORD nt_headers_rva;
+#ifndef _WIN64
+        DWORD original_size_of_image;
+        DWORD original_number_of_rva_and_sizes;
+        IMAGE_DATA_DIRECTORY original_load_config;
+#endif
 
         decltype(&LoadLibraryA) fn_load_library_a;
         decltype(&GetProcAddress) fn_get_proc_address;

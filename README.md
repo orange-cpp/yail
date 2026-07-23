@@ -118,6 +118,15 @@ On success, returns the base address of the mapped image in the target process. 
 
 The returned address is not a loader-managed `HMODULE`. A DLL mapped by yail is absent from the Windows loader module list, so passing that address to `FreeLibrary` or `FreeLibraryAndExitThread` is invalid. yail does not currently provide manual unmapping. A mapped DLL must stop its work and return, or be loaded with `LoadLibrary` when OS-managed unload is required.
 
+### Themida compatibility
+
+Protect DLLs intended for manual mapping with this Themida Option:
+
+```text
+Anti-File patching must me OFF
+```
+
+
 ## CMake Integration
 
 ```cmake
@@ -140,7 +149,7 @@ The `examples/` directory contains:
 Quick verification on either bitness:
 
 ```bash
-loader.exe test_dll.dll       # 22 tests
+loader.exe test_dll.dll       # 23 tests
 loader.exe test_exe.exe       # 16 tests + ExitThread keeps the loader alive
 loader.exe test_winexe.exe    # WinMain path + GUI subsystem checks
 ```

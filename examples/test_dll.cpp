@@ -30,11 +30,22 @@ static void Report(const char* name, bool ok)
 // 1. TLS callback — must fire before DllMain
 // =========================================================================
 static volatile bool g_tlsCallbackFired = false;
+static volatile bool g_tlsCallbackExceptionHandled = false;
 
 static void NTAPI TlsCallback(PVOID hModule, DWORD dwReason, PVOID pContext)
 {
     if (dwReason == DLL_PROCESS_ATTACH)
     {
+        constexpr DWORD exception_code = 0xE0C05701;
+        __try
+        {
+            RaiseException(exception_code, 0, 0, nullptr);
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            g_tlsCallbackExceptionHandled = true;
+        }
+
         g_tlsCallbackFired = true;
         printf("[test_dll] TLS callback fired (DLL_PROCESS_ATTACH)\n");
     }
@@ -552,6 +563,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD dwReason, LPVOID lpReserved)
     printf("========================================\n\n");
 
     Report("TLS callback fired",        g_tlsCallbackFired);
+    Report("TLS callback exception",    g_tlsCallbackExceptionHandled);
     Report("Static TLS read/write",     TestStaticTLS());
     Report("Static TLS per-thread",     TestTLSPerThread());
     Report("SEH access violation",      TestSEH());

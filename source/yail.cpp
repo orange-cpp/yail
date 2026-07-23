@@ -21,8 +21,9 @@
 
 namespace yail
 {
-    std::expected<std::uintptr_t, std::string>
-    manual_map_injection_from_raw(const std::span<const std::uint8_t>& raw_dll, const std::uintptr_t process_id)
+    static std::expected<std::uintptr_t, std::string>
+    manual_map_injection_from_raw_impl(const std::span<const std::uint8_t>& raw_dll,
+                                       const std::uintptr_t process_id)
     {
         const auto pe_machine = detail::get_pe_machine(raw_dll);
         if (!pe_machine)
@@ -53,17 +54,32 @@ namespace yail
 
         const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(raw_dll.data());
         const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(raw_dll.data() + dos->e_lfanew);
-        const std::size_t image_size = nt->OptionalHeader.SizeOfImage;
+        std::size_t image_size = nt->OptionalHeader.SizeOfImage;
 
-        // Allocate image memory in target process
-        auto* remote_image = static_cast<std::uint8_t*>(
-                VirtualAllocEx(process_handle, nullptr, image_size, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+#ifndef _WIN64
+        const auto safe_seh_layout = detail::plan_x86_safe_seh(raw_dll);
+        if (!safe_seh_layout)
+        {
+            CloseHandle(process_handle);
+            return std::unexpected(safe_seh_layout.error());
+        }
+        image_size = safe_seh_layout->expanded_size_of_image;
+#endif
 
+        auto* const remote_image = static_cast<std::uint8_t*>(VirtualAllocEx(
+                process_handle, nullptr, image_size, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
         if (!remote_image)
         {
             CloseHandle(process_handle);
             return std::unexpected(std::format("VirtualAllocEx failed for image (error {})", GetLastError()));
         }
+
+        const auto fail_image = [&](std::string error) -> std::expected<std::uintptr_t, std::string>
+        {
+            VirtualFreeEx(process_handle, remote_image, 0, MEM_RELEASE);
+            CloseHandle(process_handle);
+            return std::unexpected(std::move(error));
+        };
 
         // Prepare local copy: headers + sections
         std::vector<std::uint8_t> local_image(image_size, 0);
@@ -80,19 +96,16 @@ namespace yail
 
         // Relocate for remote base address
         if (!detail::relocate_for_base(local_image.data(), reinterpret_cast<std::uintptr_t>(remote_image)))
-        {
-            VirtualFreeEx(process_handle, remote_image, 0, MEM_RELEASE);
-            CloseHandle(process_handle);
-            return std::unexpected("Image requires relocation but has no relocation directory");
-        }
+            return fail_image("Image requires relocation but has no relocation directory");
+
+#ifndef _WIN64
+        detail::write_x86_safe_seh(local_image.data(), reinterpret_cast<std::uintptr_t>(remote_image),
+                                   *safe_seh_layout);
+#endif
 
         // Write image to target
         if (!WriteProcessMemory(process_handle, remote_image, local_image.data(), image_size, nullptr))
-        {
-            VirtualFreeEx(process_handle, remote_image, 0, MEM_RELEASE);
-            CloseHandle(process_handle);
-            return std::unexpected("WriteProcessMemory failed for image");
-        }
+            return fail_image("WriteProcessMemory failed for image");
 
         // Prepare shellcode page: [RemoteLoaderData | padding | shellcode bytes]
 #ifdef _WIN64
@@ -107,11 +120,7 @@ namespace yail
                 process_handle, nullptr, total_shellcode, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
 
         if (!remote_shellcode)
-        {
-            VirtualFreeEx(process_handle, remote_image, 0, MEM_RELEASE);
-            CloseHandle(process_handle);
-            return std::unexpected("VirtualAllocEx failed for shellcode");
-        }
+            return fail_image("VirtualAllocEx failed for shellcode");
 
         // Fill loader data
         // ntdll and kernel32 are mapped at the same base in every process (per boot),
@@ -121,6 +130,11 @@ namespace yail
         detail::RemoteLoaderData loader_data{};
         loader_data.image_base = remote_image;
         loader_data.nt_headers_rva = static_cast<DWORD>(local_dos_header->e_lfanew);
+#ifndef _WIN64
+        loader_data.original_size_of_image = safe_seh_layout->original_size_of_image;
+        loader_data.original_number_of_rva_and_sizes = safe_seh_layout->original_number_of_rva_and_sizes;
+        loader_data.original_load_config = safe_seh_layout->original_load_config;
+#endif
         loader_data.fn_load_library_a = LoadLibraryA;
         loader_data.fn_get_proc_address = GetProcAddress;
 #ifdef _WIN64
@@ -129,11 +143,7 @@ namespace yail
         loader_data.fn_virtual_protect = VirtualProtect;
         const auto tls_fn = detail::find_ldrp_handle_tls_data();
         if (!tls_fn)
-        {
-            VirtualFreeEx(process_handle, remote_image, 0, MEM_RELEASE);
-            CloseHandle(process_handle);
-            return std::unexpected(tls_fn.error());
-        }
+            return fail_image(tls_fn.error());
         loader_data.fn_ldrp_handle_tls_data = tls_fn.value();
         // RtlInsertInvertedFunctionTable is required on x64 (unwind tables) but optional on
         // x86 - without it, manually-mapped DLLs that throw will crash on dispatch, but DLLs
@@ -142,26 +152,19 @@ namespace yail
             loader_data.fn_rtl_insert_inverted_function_table = inv_fn.value();
 #ifdef _WIN64
         else
-        {
-            VirtualFreeEx(process_handle, remote_image, 0, MEM_RELEASE);
-            CloseHandle(process_handle);
-            return std::unexpected(inv_fn.error());
-        }
+            return fail_image(inv_fn.error());
 #endif
 
         // Build local shellcode page
         std::vector<std::uint8_t> shell_code_page(total_shellcode, 0);
         std::copy_n(reinterpret_cast<const std::uint8_t*>(&loader_data), sizeof(loader_data), shell_code_page.data());
-        std::ranges::copy(native_remote_shellcode,
-                  shell_code_page.data() + data_aligned);
+        std::ranges::copy(native_remote_shellcode, shell_code_page.data() + data_aligned);
 
         // Write shellcode page to target
         if (!WriteProcessMemory(process_handle, remote_shellcode, shell_code_page.data(), total_shellcode, nullptr))
         {
             VirtualFreeEx(process_handle, remote_shellcode, 0, MEM_RELEASE);
-            VirtualFreeEx(process_handle, remote_image, 0, MEM_RELEASE);
-            CloseHandle(process_handle);
-            return std::unexpected("WriteProcessMemory failed for shellcode");
+            return fail_image("WriteProcessMemory failed for shellcode");
         }
 
         // Create remote thread: entry = shellcode code, param = RemoteLoaderData*
@@ -174,9 +177,7 @@ namespace yail
         if (!thread_handle)
         {
             VirtualFreeEx(process_handle, remote_shellcode, 0, MEM_RELEASE);
-            VirtualFreeEx(process_handle, remote_image, 0, MEM_RELEASE);
-            CloseHandle(process_handle);
-            return std::unexpected(std::format("CreateRemoteThread failed (error {})", GetLastError()));
+            return fail_image(std::format("CreateRemoteThread failed (error {})", GetLastError()));
         }
 
         WaitForSingleObject(thread_handle, INFINITE);
@@ -187,12 +188,18 @@ namespace yail
 
         // Free shellcode page - no longer needed after init
         VirtualFreeEx(process_handle, remote_shellcode, 0, MEM_RELEASE);
-        CloseHandle(process_handle);
 
         if (exit_code != 0)
-            return std::unexpected(std::format("Remote shellcode failed (exit code {})", exit_code));
+            return fail_image(std::format("Remote shellcode failed (exit code {})", exit_code));
 
+        CloseHandle(process_handle);
         return reinterpret_cast<std::uintptr_t>(remote_image);
+    }
+
+    std::expected<std::uintptr_t, std::string>
+    manual_map_injection_from_raw(const std::span<const std::uint8_t>& raw_dll, const std::uintptr_t process_id)
+    {
+        return manual_map_injection_from_raw_impl(raw_dll, process_id);
     }
 
     std::expected<std::uintptr_t, std::string>
@@ -217,20 +224,18 @@ namespace yail
             return std::unexpected("Failed to open DLL file");
 
         file.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(data.size()));
+        file.close();
 
-        return manual_map_injection_from_raw({data.data(), data.size()}, process_id);
+        return manual_map_injection_from_raw_impl({data.data(), data.size()}, process_id);
     }
 
     std::expected<std::uintptr_t, std::string> manual_map_injection_from_file(const std::string_view& dll_path,
                                                                               const std::string_view& process_name)
     {
-        std::vector<std::uint8_t> data(static_cast<std::size_t>(std::filesystem::file_size(dll_path)), 0);
-        std::ifstream file(std::filesystem::path{dll_path}, std::ios::binary);
-        if (!file.is_open())
-            return std::unexpected("Failed to open DLL file");
+        const auto pid = detail::get_process_id_by_name(process_name);
+        if (!pid)
+            return std::unexpected(std::format("Process \"{}\" not found", process_name));
 
-        file.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(data.size()));
-
-        return manual_map_injection_from_raw({data.data(), data.size()}, process_name);
+        return manual_map_injection_from_file(dll_path, pid.value());
     }
 } // namespace yail

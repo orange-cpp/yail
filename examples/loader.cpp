@@ -5,7 +5,7 @@
 #include <print>
 int main(int argc, char* argv[])
 {
-    std::string dllPath = "test_dll.dll";
+    std::string dllPath = "test_dll.vmp.dll";
     if (argc > 1)
         dllPath = argv[1];
 
