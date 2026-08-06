@@ -3,8 +3,8 @@
 #include <cstdint>
 #include <expected>
 #include <optional>
-#include <string>
 #include <string_view>
+#include <yail/error.hpp>
 
 namespace yail::detail
 {
@@ -58,5 +58,5 @@ namespace yail::detail
     std::optional<std::uintptr_t> get_process_id_by_name(const std::string_view& process_name);
 
     [[nodiscard]]
-    std::expected<void, std::string> validate_target_machine(std::uintptr_t process_id, WORD expected_machine);
+    std::expected<void, Error> validate_target_machine(std::uintptr_t process_id, WORD expected_machine);
 }

@@ -3,10 +3,11 @@
 //
 #pragma once
 #include <expected>
-#include <string>
 #include <span>
 #include <cstdint>
 #include <cstddef>
+#include <string_view>
+#include <yail/error.hpp>
 
 namespace yail
 {
@@ -21,18 +22,18 @@ namespace yail
     // An x64 build can also map x86 images into WOW64 targets in-process.
 
     [[nodiscard]]
-    std::expected<std::uintptr_t, std::string> manual_map_injection_from_raw(
+    std::expected<std::uintptr_t, Error> manual_map_injection_from_raw(
             const std::span<const std::uint8_t>& raw_pe, std::uintptr_t process_id);
 
     [[nodiscard]]
-    std::expected<std::uintptr_t, std::string> manual_map_injection_from_raw(
+    std::expected<std::uintptr_t, Error> manual_map_injection_from_raw(
             const std::span<const std::uint8_t>& raw_pe, const std::string_view& process_name);
 
     [[nodiscard]]
-    std::expected<std::uintptr_t, std::string> manual_map_injection_from_file(
+    std::expected<std::uintptr_t, Error> manual_map_injection_from_file(
             const std::string_view& pe_path, std::uintptr_t process_id);
 
     [[nodiscard]]
-    std::expected<std::uintptr_t, std::string> manual_map_injection_from_file(
+    std::expected<std::uintptr_t, Error> manual_map_injection_from_file(
             const std::string_view& pe_path, const std::string_view& process_name);
 }

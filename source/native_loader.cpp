@@ -41,26 +41,26 @@ namespace yail::detail
         // The shellcode reference implementation used for regeneration lives in tools/generate_shellcode.cpp.
 
 #ifdef YAIL_USE_PDB
-        [[nodiscard]] std::expected<NtdllSymbolRvas, std::string> load_native_ntdll_symbol_rvas()
+        [[nodiscard]] std::expected<NtdllSymbolRvas, Error> load_native_ntdll_symbol_rvas()
         {
             const auto* ntdll = reinterpret_cast<const std::uint8_t*>(GetModuleHandleA("ntdll.dll"));
             if (!ntdll)
-                return std::unexpected("Failed to find loaded ntdll.dll");
+                return std::unexpected(Error::ntdll_not_found);
 
             const auto* dos_headers = reinterpret_cast<const IMAGE_DOS_HEADER*>(ntdll);
             if (dos_headers->e_magic != IMAGE_DOS_SIGNATURE || dos_headers->e_lfanew < 0)
-                return std::unexpected("Loaded ntdll.dll has invalid DOS headers");
+                return std::unexpected(Error::invalid_remote_module);
 
             const auto* nt_headers = reinterpret_cast<const IMAGE_NT_HEADERS*>(ntdll + dos_headers->e_lfanew);
             if (nt_headers->Signature != IMAGE_NT_SIGNATURE
                 || nt_headers->OptionalHeader.NumberOfRvaAndSizes <= IMAGE_DIRECTORY_ENTRY_DEBUG)
-                return std::unexpected("Loaded ntdll.dll has invalid NT headers");
+                return std::unexpected(Error::invalid_remote_module);
 
             const std::size_t image_size = nt_headers->OptionalHeader.SizeOfImage;
             const auto& debug_data = nt_headers->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DEBUG];
             if (!debug_data.Size || debug_data.VirtualAddress >= image_size
                 || debug_data.Size > image_size - debug_data.VirtualAddress)
-                return std::unexpected("Loaded ntdll.dll has no valid debug directory");
+                return std::unexpected(Error::ntdll_debug_directory_missing);
 
             std::vector<PdbImageSection> sections;
             sections.reserve(nt_headers->FileHeader.NumberOfSections);
@@ -85,10 +85,10 @@ namespace yail::detail
                     return download_ntdll_symbol_rvas(*identifier, sections);
             }
 
-            return std::unexpected("Loaded ntdll.dll has no valid CodeView debug record");
+            return std::unexpected(Error::ntdll_codeview_record_missing);
         }
 
-        [[nodiscard]] const std::expected<NtdllSymbolRvas, std::string>& native_ntdll_symbol_rvas()
+        [[nodiscard]] const std::expected<NtdllSymbolRvas, Error>& native_ntdll_symbol_rvas()
         {
             static const auto result = load_native_ntdll_symbol_rvas();
             return result;
@@ -96,7 +96,7 @@ namespace yail::detail
 #endif
     } // namespace
 
-    std::expected<void*, std::string> find_ldrp_handle_tls_data()
+    std::expected<void*, Error> find_ldrp_handle_tls_data()
     {
         constexpr std::array signatures = {
 #ifdef _WIN64
@@ -122,10 +122,10 @@ namespace yail::detail
                 return reinterpret_cast<void*>(result.value());
         }
 
-        return std::unexpected("Failed to find LdrpHandleTlsData");
+        return std::unexpected(Error::ldrp_handle_tls_data_not_found);
     }
 
-    std::expected<void*, std::string> find_rtl_insert_inverted_function_table()
+    std::expected<void*, Error> find_rtl_insert_inverted_function_table()
     {
         constexpr std::array signatures = {
 #ifdef _WIN64
@@ -152,6 +152,6 @@ namespace yail::detail
                 return reinterpret_cast<void*>(result.value());
         }
 
-        return std::unexpected("Failed to find RtlInsertInvertedFunctionTable");
+        return std::unexpected(Error::rtl_insert_inverted_function_table_not_found);
     }
 }

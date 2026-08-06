@@ -6,10 +6,8 @@
 #include <cstdint>
 #include <expected>
 #include <filesystem>
-#include <format>
 #include <fstream>
 #include <span>
-#include <string>
 #include <string_view>
 #include <vector>
 #include <yail/detail/native_loader.hpp>
@@ -21,13 +19,13 @@
 
 namespace yail
 {
-    static std::expected<std::uintptr_t, std::string>
+    static std::expected<std::uintptr_t, Error>
     manual_map_injection_from_raw_impl(const std::span<const std::uint8_t>& raw_dll,
                                        const std::uintptr_t process_id)
     {
         const auto pe_machine = detail::get_pe_machine(raw_dll);
         if (!pe_machine)
-            return std::unexpected("File is not in a Portable Executable format");
+            return std::unexpected(Error::invalid_pe);
 
 #ifdef _WIN64
         if (*pe_machine == IMAGE_FILE_MACHINE_I386)
@@ -38,7 +36,7 @@ namespace yail
 #endif
 
         if (*pe_machine != expected_machine)
-            return std::unexpected(std::format("Unsupported PE machine 0x{:04x} for this injector", *pe_machine));
+            return std::unexpected(Error::unsupported_pe_machine);
 
         if (const auto architecture = detail::validate_target_machine(process_id, expected_machine); !architecture)
             return std::unexpected(architecture.error());
@@ -50,7 +48,7 @@ namespace yail
                                             FALSE, static_cast<DWORD>(process_id));
 
         if (!process_handle)
-            return std::unexpected(std::format("Failed to open target process (error {})", GetLastError()));
+            return std::unexpected(Error::process_open_failed);
 
         const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(raw_dll.data());
         const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(raw_dll.data() + dos->e_lfanew);
@@ -71,14 +69,14 @@ namespace yail
         if (!remote_image)
         {
             CloseHandle(process_handle);
-            return std::unexpected(std::format("VirtualAllocEx failed for image (error {})", GetLastError()));
+            return std::unexpected(Error::image_allocation_failed);
         }
 
-        const auto fail_image = [&](std::string error) -> std::expected<std::uintptr_t, std::string>
+        const auto fail_image = [&](const Error error) -> std::expected<std::uintptr_t, Error>
         {
             VirtualFreeEx(process_handle, remote_image, 0, MEM_RELEASE);
             CloseHandle(process_handle);
-            return std::unexpected(std::move(error));
+            return std::unexpected(error);
         };
 
         // Prepare local copy: headers + sections
@@ -96,7 +94,7 @@ namespace yail
 
         // Relocate for remote base address
         if (!detail::relocate_for_base(local_image.data(), reinterpret_cast<std::uintptr_t>(remote_image)))
-            return fail_image("Image requires relocation but has no relocation directory");
+            return fail_image(Error::relocation_missing);
 
 #ifndef _WIN64
         detail::write_x86_safe_seh(local_image.data(), reinterpret_cast<std::uintptr_t>(remote_image),
@@ -105,7 +103,7 @@ namespace yail
 
         // Write image to target
         if (!WriteProcessMemory(process_handle, remote_image, local_image.data(), image_size, nullptr))
-            return fail_image("WriteProcessMemory failed for image");
+            return fail_image(Error::image_write_failed);
 
         // Prepare shellcode page: [RemoteLoaderData | padding | shellcode bytes]
 #ifdef _WIN64
@@ -120,7 +118,7 @@ namespace yail
                 process_handle, nullptr, total_shellcode, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
 
         if (!remote_shellcode)
-            return fail_image("VirtualAllocEx failed for shellcode");
+            return fail_image(Error::shellcode_allocation_failed);
 
         // Fill loader data
         // ntdll and kernel32 are mapped at the same base in every process (per boot),
@@ -164,7 +162,7 @@ namespace yail
         if (!WriteProcessMemory(process_handle, remote_shellcode, shell_code_page.data(), total_shellcode, nullptr))
         {
             VirtualFreeEx(process_handle, remote_shellcode, 0, MEM_RELEASE);
-            return fail_image("WriteProcessMemory failed for shellcode");
+            return fail_image(Error::shellcode_write_failed);
         }
 
         // Create remote thread: entry = shellcode code, param = RemoteLoaderData*
@@ -177,7 +175,7 @@ namespace yail
         if (!thread_handle)
         {
             VirtualFreeEx(process_handle, remote_shellcode, 0, MEM_RELEASE);
-            return fail_image(std::format("CreateRemoteThread failed (error {})", GetLastError()));
+            return fail_image(Error::remote_thread_creation_failed);
         }
 
         WaitForSingleObject(thread_handle, INFINITE);
@@ -190,38 +188,38 @@ namespace yail
         VirtualFreeEx(process_handle, remote_shellcode, 0, MEM_RELEASE);
 
         if (exit_code != 0)
-            return fail_image(std::format("Remote shellcode failed (exit code {})", exit_code));
+            return fail_image(Error::remote_shellcode_failed);
 
         CloseHandle(process_handle);
         return reinterpret_cast<std::uintptr_t>(remote_image);
     }
 
-    std::expected<std::uintptr_t, std::string>
+    std::expected<std::uintptr_t, Error>
     manual_map_injection_from_raw(const std::span<const std::uint8_t>& raw_dll, const std::uintptr_t process_id)
     {
         return manual_map_injection_from_raw_impl(raw_dll, process_id);
     }
 
-    std::expected<std::uintptr_t, std::string>
+    std::expected<std::uintptr_t, Error>
     manual_map_injection_from_raw(const std::span<const std::uint8_t>& raw_dll, const std::string_view& process_name)
     {
         const auto pid = detail::get_process_id_by_name(process_name);
 
         if (!pid)
-            return std::unexpected(std::format("Process \"{}\" not found", process_name));
+            return std::unexpected(Error::process_not_found);
 
         return manual_map_injection_from_raw(raw_dll, pid.value());
     }
 
-    std::expected<std::uintptr_t, std::string> manual_map_injection_from_file(const std::string_view& dll_path,
-                                                                              const std::uintptr_t process_id)
+    std::expected<std::uintptr_t, Error> manual_map_injection_from_file(const std::string_view& dll_path,
+                                                                        const std::uintptr_t process_id)
     {
         if (!std::filesystem::exists(dll_path))
-            return std::unexpected("File does not exists.");
+            return std::unexpected(Error::file_not_found);
         std::vector<std::uint8_t> data(static_cast<std::size_t>(std::filesystem::file_size(dll_path)), 0);
         std::ifstream file(std::filesystem::path{dll_path}, std::ios::binary);
         if (!file.is_open())
-            return std::unexpected("Failed to open DLL file");
+            return std::unexpected(Error::file_open_failed);
 
         file.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(data.size()));
         file.close();
@@ -229,12 +227,12 @@ namespace yail
         return manual_map_injection_from_raw_impl({data.data(), data.size()}, process_id);
     }
 
-    std::expected<std::uintptr_t, std::string> manual_map_injection_from_file(const std::string_view& dll_path,
-                                                                              const std::string_view& process_name)
+    std::expected<std::uintptr_t, Error> manual_map_injection_from_file(const std::string_view& dll_path,
+                                                                        const std::string_view& process_name)
     {
         const auto pid = detail::get_process_id_by_name(process_name);
         if (!pid)
-            return std::unexpected(std::format("Process \"{}\" not found", process_name));
+            return std::unexpected(Error::process_not_found);
 
         return manual_map_injection_from_file(dll_path, pid.value());
     }

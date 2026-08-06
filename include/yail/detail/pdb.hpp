@@ -7,6 +7,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <yail/error.hpp>
 
 namespace yail::detail
 {
@@ -33,10 +34,10 @@ namespace yail::detail
     };
 
     [[nodiscard]]
-    std::expected<PdbIdentifier, std::string> parse_pdb_identifier(std::span<const std::uint8_t> codeview_data);
+    std::expected<PdbIdentifier, Error> parse_pdb_identifier(std::span<const std::uint8_t> codeview_data);
 
     [[nodiscard]]
-    std::expected<NtdllSymbolRvas, std::string>
+    std::expected<NtdllSymbolRvas, Error>
     download_ntdll_symbol_rvas(const PdbIdentifier& identifier, std::span<const PdbImageSection> image_sections);
 }
 #endif

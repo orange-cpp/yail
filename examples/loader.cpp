@@ -5,7 +5,7 @@
 #include <print>
 int main(int argc, char* argv[])
 {
-    std::string dllPath = "test_dll.dll";
+    std::string dllPath = "test_dll_protected.dll";
     if (argc > 1)
         dllPath = argv[1];
 
@@ -15,7 +15,7 @@ int main(int argc, char* argv[])
 
     if (!result)
     {
-        std::println("[loader] FAILED: {}",  result.error());
+        std::println("[loader] FAILED: {}", yail::to_string(result.error()));
         return 1;
     }
 

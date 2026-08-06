@@ -14,7 +14,7 @@
 - Per-section memory protections (RX, RW, RO, RWX as declared)
 - Inject by process ID or process name
 - Load from file path or raw bytes in memory
-- Returns `std::expected<uintptr_t, std::string>` — no exceptions, clear error messages
+- Returns `std::expected<uintptr_t, yail::Error>` — no exceptions or error-path allocations
 
 ## Requirements
 
@@ -53,7 +53,7 @@ Examples build by default. Disable with `-DYAIL_BUILD_EXAMPLES=OFF`.
 auto result = yail::manual_map_injection_from_file("my.dll", "target.exe");
 
 if (!result)
-    std::println("Failed: {}", result.error());
+    std::println("Failed: {}", yail::to_string(result.error()));
 else
     std::println("Loaded at 0x{:x}", result.value());
 ```
@@ -100,21 +100,22 @@ namespace yail
     // Native PE machine type must match the build. An x64 build also accepts
     // I386 PEs when the target is a WOW64 process.
 
-    std::expected<uintptr_t, std::string>
+    std::expected<uintptr_t, Error>
     manual_map_injection_from_file(std::string_view pe_path, std::uintptr_t process_id);
 
-    std::expected<uintptr_t, std::string>
+    std::expected<uintptr_t, Error>
     manual_map_injection_from_file(std::string_view pe_path, std::string_view process_name);
 
-    std::expected<uintptr_t, std::string>
+    std::expected<uintptr_t, Error>
     manual_map_injection_from_raw(const std::span<std::uint8_t>& raw_pe, std::uintptr_t process_id);
 
-    std::expected<uintptr_t, std::string>
+    std::expected<uintptr_t, Error>
     manual_map_injection_from_raw(const std::span<std::uint8_t>& raw_pe, std::string_view process_name);
 }
 ```
 
-On success, returns the base address of the mapped image in the target process. On failure, returns a string describing the error.
+On success, returns the base address of the mapped image in the target process. On failure, returns a stable
+`yail::Error` code. Pass it to `yail::to_string` when a human-readable description is needed.
 
 The returned address is not a loader-managed `HMODULE`. A DLL mapped by yail is absent from the Windows loader module list, so passing that address to `FreeLibrary` or `FreeLibraryAndExitThread` is invalid. yail does not currently provide manual unmapping. A mapped DLL must stop its work and return, or be loaded with `LoadLibrary` when OS-managed unload is required.
 

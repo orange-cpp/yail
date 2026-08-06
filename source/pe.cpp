@@ -1,7 +1,6 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
-#include <format>
 #include <limits>
 #include <yail/detail/pe.hpp>
 
@@ -29,36 +28,36 @@ namespace yail::detail
         }
     } // namespace
 
-    std::expected<X86SafeSehLayout, std::string> plan_x86_safe_seh(
+    std::expected<X86SafeSehLayout, Error> plan_x86_safe_seh(
             const std::span<const std::uint8_t>& raw_pe)
     {
         if (raw_pe.size() < sizeof(IMAGE_DOS_HEADER))
-            return std::unexpected("PE image is smaller than its DOS header");
+            return std::unexpected(Error::truncated_pe_headers);
 
         const auto* dos_headers = reinterpret_cast<const IMAGE_DOS_HEADER*>(raw_pe.data());
         if (dos_headers->e_magic != IMAGE_DOS_SIGNATURE || dos_headers->e_lfanew < 0)
-            return std::unexpected("PE image has an invalid DOS header");
+            return std::unexpected(Error::invalid_pe);
 
         const auto nt_offset = static_cast<std::size_t>(dos_headers->e_lfanew);
         if (nt_offset > raw_pe.size() || raw_pe.size() - nt_offset < sizeof(IMAGE_NT_HEADERS32))
-            return std::unexpected("PE image has a truncated NT header");
+            return std::unexpected(Error::truncated_pe_headers);
 
         const auto* nt_headers = reinterpret_cast<const IMAGE_NT_HEADERS32*>(raw_pe.data() + nt_offset);
         if (nt_headers->Signature != IMAGE_NT_SIGNATURE || nt_headers->FileHeader.Machine != IMAGE_FILE_MACHINE_I386
             || nt_headers->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR32_MAGIC)
-            return std::unexpected("SafeSEH metadata can only be planned for a valid x86 PE image");
+            return std::unexpected(Error::invalid_pe);
 
         const auto section_table_offset = nt_offset + offsetof(IMAGE_NT_HEADERS32, OptionalHeader)
                                           + nt_headers->FileHeader.SizeOfOptionalHeader;
         const auto section_table_size =
                 static_cast<std::size_t>(nt_headers->FileHeader.NumberOfSections) * sizeof(IMAGE_SECTION_HEADER);
         if (section_table_offset > raw_pe.size() || raw_pe.size() - section_table_offset < section_table_size)
-            return std::unexpected("PE image has a truncated section table");
+            return std::unexpected(Error::truncated_pe_section_table);
 
         const DWORD original_size = nt_headers->OptionalHeader.SizeOfImage;
         const DWORD section_alignment = nt_headers->OptionalHeader.SectionAlignment;
         if (!original_size || !section_alignment)
-            return std::unexpected("PE image has an invalid image size or section alignment");
+            return std::unexpected(Error::invalid_pe_layout);
 
         const auto* sections =
                 reinterpret_cast<const IMAGE_SECTION_HEADER*>(raw_pe.data() + section_table_offset);
@@ -77,9 +76,9 @@ namespace yail::detail
         }
 
         if (!handler_count)
-            return std::unexpected("x86 PE image has no executable section bytes");
+            return std::unexpected(Error::no_executable_sections);
         if (handler_count > std::numeric_limits<DWORD>::max())
-            return std::unexpected("x86 SafeSEH handler table is too large");
+            return std::unexpected(Error::safe_seh_table_too_large);
 
         const std::uint64_t table_rva = align_up(original_size, alignof(DWORD));
         const std::uint64_t table_size = handler_count * sizeof(DWORD);
@@ -87,7 +86,7 @@ namespace yail::detail
         const std::uint64_t expanded_size =
                 align_up(load_config_rva + safe_seh_load_config_size, section_alignment);
         if (expanded_size > std::numeric_limits<DWORD>::max())
-            return std::unexpected("x86 image is too large after adding SafeSEH metadata");
+            return std::unexpected(Error::image_too_large);
 
         IMAGE_DATA_DIRECTORY original_load_config{};
         if (nt_headers->OptionalHeader.NumberOfRvaAndSizes > IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG)

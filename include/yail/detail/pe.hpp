@@ -5,7 +5,7 @@
 #include <expected>
 #include <optional>
 #include <span>
-#include <string>
+#include <yail/error.hpp>
 
 namespace yail::detail
 {
@@ -27,7 +27,7 @@ namespace yail::detail
     bool relocate_for_base(std::uint8_t* local_image, std::uintptr_t target_base);
 
     [[nodiscard]]
-    std::expected<X86SafeSehLayout, std::string> plan_x86_safe_seh(const std::span<const std::uint8_t>& raw_pe);
+    std::expected<X86SafeSehLayout, Error> plan_x86_safe_seh(const std::span<const std::uint8_t>& raw_pe);
 
     void write_x86_safe_seh(std::uint8_t* local_image, std::uintptr_t target_base,
                             const X86SafeSehLayout& layout);

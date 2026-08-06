@@ -2,7 +2,7 @@
 #include <Windows.h>
 #include <cstdint>
 #include <expected>
-#include <string>
+#include <yail/error.hpp>
 
 namespace yail::detail
 {
@@ -27,8 +27,8 @@ namespace yail::detail
     };
 
     [[nodiscard]]
-    std::expected<void*, std::string> find_ldrp_handle_tls_data();
+    std::expected<void*, Error> find_ldrp_handle_tls_data();
 
     [[nodiscard]]
-    std::expected<void*, std::string> find_rtl_insert_inverted_function_table();
+    std::expected<void*, Error> find_rtl_insert_inverted_function_table();
 }

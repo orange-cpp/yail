@@ -41,11 +41,11 @@ namespace yail::detail
         class MsfFile final
         {
         public:
-            [[nodiscard]] static std::expected<MsfFile, std::string> parse(const std::span<const std::uint8_t> data)
+            [[nodiscard]] static std::expected<MsfFile, Error> parse(const std::span<const std::uint8_t> data)
             {
                 if (data.size() < 56 || std::string_view{reinterpret_cast<const char*>(data.data()), msf_magic.size()}
                                                  != msf_magic)
-                    return std::unexpected("Downloaded symbol file is not an MSF 7.0 PDB");
+                    return std::unexpected(Error::invalid_pdb);
 
                 const auto block_size = read_value<std::uint32_t>(data, 32);
                 const auto block_count = read_value<std::uint32_t>(data, 40);
@@ -53,21 +53,21 @@ namespace yail::detail
                 const auto block_map_block = read_value<std::uint32_t>(data, 52);
                 if (!block_size || !block_count || !directory_size || !block_map_block || *block_size < 512
                     || *block_size > (1U << 20) || *block_count == 0)
-                    return std::unexpected("PDB has an invalid MSF header");
+                    return std::unexpected(Error::invalid_pdb);
 
                 const auto file_size = static_cast<std::uint64_t>(*block_size) * *block_count;
                 if (file_size > data.size())
-                    return std::unexpected("PDB is truncated");
+                    return std::unexpected(Error::invalid_pdb);
 
                 const std::size_t directory_block_count =
                         (*directory_size + static_cast<std::size_t>(*block_size) - 1) / *block_size;
                 if (directory_block_count > std::numeric_limits<std::size_t>::max() / sizeof(std::uint32_t))
-                    return std::unexpected("PDB stream directory is too large");
+                    return std::unexpected(Error::invalid_pdb);
 
                 const std::size_t block_map_offset = static_cast<std::size_t>(*block_map_block) * *block_size;
                 const std::size_t block_map_size = directory_block_count * sizeof(std::uint32_t);
                 if (block_map_offset > data.size() || block_map_size > data.size() - block_map_offset)
-                    return std::unexpected("PDB stream directory block map is truncated");
+                    return std::unexpected(Error::invalid_pdb);
 
                 std::vector<std::uint8_t> directory;
                 directory.reserve(*directory_size);
@@ -75,7 +75,7 @@ namespace yail::detail
                 {
                     const auto directory_block = read_value<std::uint32_t>(data, block_map_offset + i * 4);
                     if (!directory_block || *directory_block >= *block_count)
-                        return std::unexpected("PDB stream directory contains an invalid block");
+                        return std::unexpected(Error::invalid_pdb);
 
                     const std::size_t source_offset = static_cast<std::size_t>(*directory_block) * *block_size;
                     const std::size_t remaining = *directory_size - directory.size();
@@ -87,7 +87,7 @@ namespace yail::detail
                 const auto directory_data = std::span<const std::uint8_t>{directory};
                 const auto stream_count = read_value<std::uint32_t>(directory_data, 0);
                 if (!stream_count || *stream_count > (directory.size() - sizeof(std::uint32_t)) / sizeof(std::uint32_t))
-                    return std::unexpected("PDB has an invalid stream count");
+                    return std::unexpected(Error::invalid_pdb);
 
                 std::size_t cursor = sizeof(std::uint32_t);
                 std::vector<MsfStream> streams;
@@ -96,7 +96,7 @@ namespace yail::detail
                 {
                     const auto stream_size = read_value<std::uint32_t>(directory_data, cursor);
                     if (!stream_size)
-                        return std::unexpected("PDB stream sizes are truncated");
+                        return std::unexpected(Error::invalid_pdb);
                     streams.push_back({*stream_size, {}});
                 }
 
@@ -107,14 +107,14 @@ namespace yail::detail
                     const std::size_t stream_block_count =
                             (stream.size + static_cast<std::size_t>(*block_size) - 1) / *block_size;
                     if (stream_block_count > (directory_data.size() - cursor) / sizeof(std::uint32_t))
-                        return std::unexpected("PDB stream block list is truncated");
+                        return std::unexpected(Error::invalid_pdb);
 
                     stream.blocks.reserve(stream_block_count);
                     for (std::size_t i = 0; i < stream_block_count; i++, cursor += sizeof(std::uint32_t))
                     {
                         const auto block = read_value<std::uint32_t>(directory_data, cursor);
                         if (!block || *block >= *block_count)
-                            return std::unexpected("PDB stream contains an invalid block");
+                            return std::unexpected(Error::invalid_pdb);
                         stream.blocks.push_back(*block);
                     }
                 }
@@ -122,11 +122,11 @@ namespace yail::detail
                 return MsfFile{data, *block_size, std::move(streams)};
             }
 
-            [[nodiscard]] std::expected<std::vector<std::uint8_t>, std::string>
+            [[nodiscard]] std::expected<std::vector<std::uint8_t>, Error>
             read_stream(const std::uint32_t index) const
             {
                 if (index >= streams_.size() || streams_[index].size == missing_stream)
-                    return std::unexpected(std::format("PDB stream {} is missing", index));
+                    return std::unexpected(Error::pdb_stream_missing);
 
                 const auto& stream = streams_[index];
                 std::vector<std::uint8_t> result;
@@ -192,7 +192,7 @@ namespace yail::detail
             return section.rva + offset;
         }
 
-        [[nodiscard]] std::expected<NtdllSymbolRvas, std::string>
+        [[nodiscard]] std::expected<NtdllSymbolRvas, Error>
         parse_symbol_rvas(const std::span<const std::uint8_t> pdb_data,
                           const std::span<const PdbImageSection> image_sections)
         {
@@ -203,11 +203,11 @@ namespace yail::detail
             constexpr std::uint32_t dbi_stream_index = 3;
             const auto dbi_stream = msf->read_stream(dbi_stream_index);
             if (!dbi_stream || dbi_stream->size() < 64)
-                return std::unexpected(dbi_stream ? "PDB DBI stream is truncated" : dbi_stream.error());
+                return std::unexpected(dbi_stream ? Error::invalid_pdb_symbol_stream : dbi_stream.error());
 
             const auto symbol_stream_index = read_value<std::uint16_t>(*dbi_stream, 20);
             if (!symbol_stream_index || *symbol_stream_index == missing_stream_index)
-                return std::unexpected("PDB has no symbol record stream");
+                return std::unexpected(Error::pdb_stream_missing);
 
             const auto symbol_stream = msf->read_stream(*symbol_stream_index);
             if (!symbol_stream)
@@ -221,11 +221,11 @@ namespace yail::detail
                 const auto record_size = read_value<std::uint16_t>(symbols, cursor);
                 const auto record_type = read_value<std::uint16_t>(symbols, cursor + 2);
                 if (!record_size || !record_type || *record_size < 2)
-                    return std::unexpected("PDB symbol record stream is malformed");
+                    return std::unexpected(Error::invalid_pdb_symbol_stream);
 
                 const std::size_t total_size = sizeof(std::uint16_t) + *record_size;
                 if (total_size > symbols.size() - cursor)
-                    return std::unexpected("PDB symbol record stream is truncated");
+                    return std::unexpected(Error::invalid_pdb_symbol_stream);
 
                 if (*record_type == s_pub32 && total_size >= 15)
                 {
@@ -254,18 +254,18 @@ namespace yail::detail
             }
 
             if (!result.ldrp_handle_tls_data && !result.rtl_insert_inverted_function_table)
-                return std::unexpected("Required ntdll symbols were not found in the PDB");
+                return std::unexpected(Error::pdb_symbols_not_found);
             return result;
         }
     }
 
-    std::expected<PdbIdentifier, std::string> parse_pdb_identifier(const std::span<const std::uint8_t> codeview_data)
+    std::expected<PdbIdentifier, Error> parse_pdb_identifier(const std::span<const std::uint8_t> codeview_data)
     {
         constexpr std::array<std::uint8_t, 4> rsds_signature{'R', 'S', 'D', 'S'};
         constexpr std::size_t file_name_offset = 24;
         if (codeview_data.size() <= file_name_offset
             || !std::equal(rsds_signature.begin(), rsds_signature.end(), codeview_data.begin()))
-            return std::unexpected("ntdll.dll has no valid RSDS debug record");
+            return std::unexpected(Error::invalid_pdb_identity);
 
         const auto guid_data1 = read_value<std::uint32_t>(codeview_data, 4);
         const auto guid_data2 = read_value<std::uint16_t>(codeview_data, 8);
@@ -275,20 +275,20 @@ namespace yail::detail
         const auto* record_end = reinterpret_cast<const char*>(codeview_data.data() + codeview_data.size());
         const auto* file_name_end = std::find(file_name_begin, record_end, '\0');
         if (!guid_data1 || !guid_data2 || !guid_data3 || !age || file_name_end == record_end)
-            return std::unexpected("ntdll.dll has a truncated RSDS debug record");
+            return std::unexpected(Error::invalid_pdb_identity);
 
         std::string_view file_path{file_name_begin, file_name_end};
         const std::size_t separator = file_path.find_last_of("\\/");
         const std::string file_name{file_path.substr(separator == std::string_view::npos ? 0 : separator + 1)};
         if (!is_safe_pdb_file_name(file_name))
-            return std::unexpected("ntdll.dll has an invalid PDB file name");
+            return std::unexpected(Error::invalid_pdb_identity);
 
         PdbIdentifier result{*guid_data1, *guid_data2, *guid_data3, {}, *age, file_name};
         std::copy_n(codeview_data.begin() + 12, result.guid_data4.size(), result.guid_data4.begin());
         return result;
     }
 
-    std::expected<NtdllSymbolRvas, std::string>
+    std::expected<NtdllSymbolRvas, Error>
     download_ntdll_symbol_rvas(const PdbIdentifier& identifier,
                                const std::span<const PdbImageSection> image_sections)
     {
@@ -297,11 +297,9 @@ namespace yail::detail
         const auto response = cpr::Get(cpr::Url{url}, cpr::Redirect{true}, cpr::ConnectTimeout{5000},
                                        cpr::Timeout{30000});
         if (response.error.code != cpr::ErrorCode::OK)
-            return std::unexpected(std::format("Failed to download {}: {}", identifier.file_name,
-                                               response.error.message));
+            return std::unexpected(Error::pdb_download_failed);
         if (response.status_code != 200)
-            return std::unexpected(
-                    std::format("Failed to download {} (HTTP {})", identifier.file_name, response.status_code));
+            return std::unexpected(Error::pdb_download_failed);
 
         const auto* data = reinterpret_cast<const std::uint8_t*>(response.text.data());
         return parse_symbol_rvas({data, response.text.size()}, image_sections);

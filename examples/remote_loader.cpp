@@ -18,7 +18,8 @@ int main(int argc, char* argv[])
 
     if (!result)
     {
-        printf("[remote_loader] FAILED: %s\n", result.error().c_str());
+        const auto error = yail::to_string(result.error());
+        printf("[remote_loader] FAILED: %.*s\n", static_cast<int>(error.size()), error.data());
         return 1;
     }
 
