@@ -1,7 +1,12 @@
 #include <yail/detail/native_loader.hpp>
 #include <winternl.h>
+#include <algorithm>
 #include <array>
 #include <omath/utility/pe_pattern_scan.hpp>
+#ifdef YAIL_USE_PDB
+#include <vector>
+#include <yail/detail/pdb.hpp>
+#endif
 
 namespace yail::detail
 {
@@ -34,6 +39,61 @@ namespace yail::detail
         using RtlInsertInvertedFunctionTableFn = void(__fastcall*)(PVOID image_base, ULONG size_of_image);
 #endif
         // The shellcode reference implementation used for regeneration lives in tools/generate_shellcode.cpp.
+
+#ifdef YAIL_USE_PDB
+        [[nodiscard]] std::expected<NtdllSymbolRvas, std::string> load_native_ntdll_symbol_rvas()
+        {
+            const auto* ntdll = reinterpret_cast<const std::uint8_t*>(GetModuleHandleA("ntdll.dll"));
+            if (!ntdll)
+                return std::unexpected("Failed to find loaded ntdll.dll");
+
+            const auto* dos_headers = reinterpret_cast<const IMAGE_DOS_HEADER*>(ntdll);
+            if (dos_headers->e_magic != IMAGE_DOS_SIGNATURE || dos_headers->e_lfanew < 0)
+                return std::unexpected("Loaded ntdll.dll has invalid DOS headers");
+
+            const auto* nt_headers = reinterpret_cast<const IMAGE_NT_HEADERS*>(ntdll + dos_headers->e_lfanew);
+            if (nt_headers->Signature != IMAGE_NT_SIGNATURE
+                || nt_headers->OptionalHeader.NumberOfRvaAndSizes <= IMAGE_DIRECTORY_ENTRY_DEBUG)
+                return std::unexpected("Loaded ntdll.dll has invalid NT headers");
+
+            const std::size_t image_size = nt_headers->OptionalHeader.SizeOfImage;
+            const auto& debug_data = nt_headers->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DEBUG];
+            if (!debug_data.Size || debug_data.VirtualAddress >= image_size
+                || debug_data.Size > image_size - debug_data.VirtualAddress)
+                return std::unexpected("Loaded ntdll.dll has no valid debug directory");
+
+            std::vector<PdbImageSection> sections;
+            sections.reserve(nt_headers->FileHeader.NumberOfSections);
+            const auto* section = IMAGE_FIRST_SECTION(nt_headers);
+            for (WORD i = 0; i < nt_headers->FileHeader.NumberOfSections; i++, section++)
+                sections.push_back({section->VirtualAddress, std::max(section->Misc.VirtualSize, section->SizeOfRawData)});
+
+            const auto* debug_directories =
+                    reinterpret_cast<const IMAGE_DEBUG_DIRECTORY*>(ntdll + debug_data.VirtualAddress);
+            const std::size_t directory_count = debug_data.Size / sizeof(IMAGE_DEBUG_DIRECTORY);
+            for (std::size_t i = 0; i < directory_count; i++)
+            {
+                const auto& directory = debug_directories[i];
+                if (directory.Type != IMAGE_DEBUG_TYPE_CODEVIEW || !directory.SizeOfData
+                    || directory.AddressOfRawData >= image_size
+                    || directory.SizeOfData > image_size - directory.AddressOfRawData)
+                    continue;
+
+                const auto identifier = parse_pdb_identifier(
+                        {ntdll + directory.AddressOfRawData, static_cast<std::size_t>(directory.SizeOfData)});
+                if (identifier)
+                    return download_ntdll_symbol_rvas(*identifier, sections);
+            }
+
+            return std::unexpected("Loaded ntdll.dll has no valid CodeView debug record");
+        }
+
+        [[nodiscard]] const std::expected<NtdllSymbolRvas, std::string>& native_ntdll_symbol_rvas()
+        {
+            static const auto result = load_native_ntdll_symbol_rvas();
+            return result;
+        }
+#endif
     } // namespace
 
     std::expected<void*, std::string> find_ldrp_handle_tls_data()
@@ -51,6 +111,11 @@ namespace yail::detail
         };
 
         const auto* ntdll = GetModuleHandleA("ntdll.dll");
+#ifdef YAIL_USE_PDB
+        if (const auto& symbols = native_ntdll_symbol_rvas(); symbols && symbols->ldrp_handle_tls_data)
+            return reinterpret_cast<void*>(reinterpret_cast<std::uintptr_t>(ntdll)
+                                           + *symbols->ldrp_handle_tls_data);
+#endif
         for (const auto* sig : signatures)
         {
             if (const auto result = omath::PePatternScanner::scan_for_pattern_in_loaded_module(ntdll, sig))
@@ -76,6 +141,11 @@ namespace yail::detail
         };
 
         const auto* ntdll = GetModuleHandleA("ntdll.dll");
+#ifdef YAIL_USE_PDB
+        if (const auto& symbols = native_ntdll_symbol_rvas(); symbols && symbols->rtl_insert_inverted_function_table)
+            return reinterpret_cast<void*>(reinterpret_cast<std::uintptr_t>(ntdll)
+                                           + *symbols->rtl_insert_inverted_function_table);
+#endif
         for (const auto* sig : signatures)
         {
             if (const auto result = omath::PePatternScanner::scan_for_pattern_in_loaded_module(ntdll, sig))

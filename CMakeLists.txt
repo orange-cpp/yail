@@ -24,6 +24,14 @@ target_compile_options(${PROJECT_NAME} PRIVATE
 find_package(omath CONFIG REQUIRED)
 target_link_libraries(${PROJECT_NAME} PRIVATE omath::omath)
 
+option(YAIL_USE_PDB "Resolve private ntdll symbols from Microsoft PDBs" ON)
+
+if (YAIL_USE_PDB)
+    find_package(cpr CONFIG REQUIRED)
+    target_link_libraries(${PROJECT_NAME} PRIVATE cpr::cpr)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE YAIL_USE_PDB)
+endif()
+
 add_executable(generate_shellcode tools/generate_shellcode.cpp)
 set_target_properties(generate_shellcode PROPERTIES CXX_STANDARD 23)
 target_compile_definitions(generate_shellcode PRIVATE YAIL_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")

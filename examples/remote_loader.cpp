@@ -4,8 +4,8 @@
 
 int main(int argc, char* argv[])
 {
-    std::string dllPath = R"(C:\Users\orange\CLionProjects\l4bhop\cmake-build\build\windows-release\l4bhop_protected.dll)";
-    std::string target  = "left4dead2.exe";
+    std::string dllPath = R"(C:\Users\orange\CLionProjects\avhook-titanfall2\build\x64-release\Wraith.dll)";
+    std::string target  = "Titanfall2.exe";
 
     if (argc > 1) dllPath = argv[1];
     if (argc > 2) target  = argv[2];

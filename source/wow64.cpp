@@ -16,6 +16,9 @@
 #include <string_view>
 #include <vector>
 #include <yail/detail/pe.hpp>
+#ifdef YAIL_USE_PDB
+#include <yail/detail/pdb.hpp>
+#endif
 #include <yail/detail/process.hpp>
 #include <yail/detail/shellcode.hpp>
 
@@ -353,6 +356,95 @@ namespace yail::detail
 
             return std::unexpected(std::format("Failed to find {} in WOW64 ntdll.dll", function_name));
         }
+
+#ifdef YAIL_USE_PDB
+        struct Wow64NtdllSymbolAddresses final
+        {
+            std::optional<std::uint32_t> ldrp_handle_tls_data;
+            std::optional<std::uint32_t> rtl_insert_inverted_function_table;
+        };
+
+        [[nodiscard]] std::expected<Wow64NtdllSymbolAddresses, std::string>
+        find_wow64_ntdll_symbol_addresses(const HANDLE process_handle, const DWORD process_id)
+        {
+            const auto module_base = find_wow64_module_base(process_id, "ntdll.dll");
+            if (!module_base)
+                return std::unexpected(module_base.error());
+            const auto headers = read_wow64_pe_headers(process_handle, *module_base);
+            if (!headers)
+                return std::unexpected(headers.error());
+
+            std::vector<IMAGE_SECTION_HEADER> section_headers(headers->nt_headers.FileHeader.NumberOfSections);
+            const auto section_headers_address = static_cast<std::uintptr_t>(*module_base)
+                                                 + static_cast<std::uint32_t>(headers->dos_headers.e_lfanew)
+                                                 + sizeof(DWORD) + sizeof(IMAGE_FILE_HEADER)
+                                                 + headers->nt_headers.FileHeader.SizeOfOptionalHeader;
+            if (const auto read = read_remote_memory(process_handle, section_headers_address, section_headers.data(),
+                                                     section_headers.size() * sizeof(IMAGE_SECTION_HEADER));
+                !read)
+                return std::unexpected(read.error());
+
+            std::vector<PdbImageSection> sections;
+            sections.reserve(section_headers.size());
+            for (const auto& section : section_headers)
+                sections.push_back(
+                        {section.VirtualAddress, std::max(section.Misc.VirtualSize, section.SizeOfRawData)});
+
+            if (headers->nt_headers.OptionalHeader.NumberOfRvaAndSizes <= IMAGE_DIRECTORY_ENTRY_DEBUG)
+                return std::unexpected("WOW64 ntdll.dll has no debug directory");
+            const auto& debug_data = headers->nt_headers.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DEBUG];
+            if (!debug_data.Size || debug_data.VirtualAddress >= headers->nt_headers.OptionalHeader.SizeOfImage
+                || debug_data.Size > headers->nt_headers.OptionalHeader.SizeOfImage - debug_data.VirtualAddress)
+                return std::unexpected("WOW64 ntdll.dll has no valid debug directory");
+
+            std::vector<IMAGE_DEBUG_DIRECTORY> debug_directories(debug_data.Size / sizeof(IMAGE_DEBUG_DIRECTORY));
+            if (debug_directories.empty())
+                return std::unexpected("WOW64 ntdll.dll has an empty debug directory");
+            if (const auto read = read_remote_memory(process_handle, *module_base + debug_data.VirtualAddress,
+                                                     debug_directories.data(),
+                                                     debug_directories.size() * sizeof(IMAGE_DEBUG_DIRECTORY));
+                !read)
+                return std::unexpected(read.error());
+
+            for (const auto& directory : debug_directories)
+            {
+                if (directory.Type != IMAGE_DEBUG_TYPE_CODEVIEW || !directory.SizeOfData
+                    || directory.AddressOfRawData >= headers->nt_headers.OptionalHeader.SizeOfImage
+                    || directory.SizeOfData
+                               > headers->nt_headers.OptionalHeader.SizeOfImage - directory.AddressOfRawData)
+                    continue;
+
+                std::vector<std::uint8_t> codeview_data(directory.SizeOfData);
+                if (const auto read = read_remote_memory(process_handle, *module_base + directory.AddressOfRawData,
+                                                         codeview_data.data(), codeview_data.size());
+                    !read)
+                    continue;
+
+                const auto identifier = parse_pdb_identifier(codeview_data);
+                if (!identifier)
+                    continue;
+                const auto rvas = download_ntdll_symbol_rvas(*identifier, sections);
+                if (!rvas)
+                    return std::unexpected(rvas.error());
+
+                Wow64NtdllSymbolAddresses result{};
+                if (rvas->ldrp_handle_tls_data
+                    && *rvas->ldrp_handle_tls_data <= std::numeric_limits<std::uint32_t>::max() - *module_base)
+                    result.ldrp_handle_tls_data = *module_base + *rvas->ldrp_handle_tls_data;
+                if (rvas->rtl_insert_inverted_function_table
+                    && *rvas->rtl_insert_inverted_function_table
+                               <= std::numeric_limits<std::uint32_t>::max() - *module_base)
+                    result.rtl_insert_inverted_function_table =
+                            *module_base + *rvas->rtl_insert_inverted_function_table;
+
+                if (result.ldrp_handle_tls_data || result.rtl_insert_inverted_function_table)
+                    return result;
+                return std::unexpected("WOW64 ntdll PDB symbols are outside the 32-bit address range");
+            }
+
+            return std::unexpected("WOW64 ntdll.dll has no valid CodeView debug record");
+        }
+#endif
     } // namespace
 
     std::expected<std::uintptr_t, std::string>
@@ -432,13 +524,26 @@ namespace yail::detail
             return fail_image(virtual_protect.error());
         loader_data.fn_virtual_protect = *virtual_protect;
 
+#ifdef YAIL_USE_PDB
+        const auto pdb_symbols =
+                find_wow64_ntdll_symbol_addresses(process_handle.get(), static_cast<DWORD>(process_id));
+#endif
+
         constexpr std::array<std::string_view, 3> ldrp_handle_tls_data_signatures{
                 "8B FF 55 8B EC 83 EC ? 53 56 57 8B 7D ? 89 4D",
                 "8B FF 55 8B EC 51 51 53 56 57 8B F1 89 75",
                 "6A ? 68 ? ? ? ? E8 ? ? ? ? 8B C1 89 45 ? 89 45",
         };
-        const auto tls_fn = find_wow64_internal_function(process_handle.get(), static_cast<DWORD>(process_id),
-                                                         "LdrpHandleTlsData", ldrp_handle_tls_data_signatures);
+        const auto resolve_tls_fn = [&]() -> std::expected<std::uint32_t, std::string>
+        {
+#ifdef YAIL_USE_PDB
+            if (pdb_symbols && pdb_symbols->ldrp_handle_tls_data)
+                return *pdb_symbols->ldrp_handle_tls_data;
+#endif
+            return find_wow64_internal_function(process_handle.get(), static_cast<DWORD>(process_id),
+                                                "LdrpHandleTlsData", ldrp_handle_tls_data_signatures);
+        };
+        const auto tls_fn = resolve_tls_fn();
         if (!tls_fn)
             return fail_image(tls_fn.error());
         loader_data.fn_ldrp_handle_tls_data = *tls_fn;
@@ -448,9 +553,17 @@ namespace yail::detail
                 "8B FF 55 8B EC 51 51 53 56 57 8B 7D ? 8D 45",
                 "8B FF 55 8B EC 53 56 57 8B 7D ? 8D 45",
         };
-        if (const auto inverted_fn = find_wow64_internal_function(process_handle.get(), static_cast<DWORD>(process_id),
-                                                                  "RtlInsertInvertedFunctionTable",
-                                                                  rtl_insert_inverted_function_table_signatures))
+        const auto resolve_inverted_fn = [&]() -> std::expected<std::uint32_t, std::string>
+        {
+#ifdef YAIL_USE_PDB
+            if (pdb_symbols && pdb_symbols->rtl_insert_inverted_function_table)
+                return *pdb_symbols->rtl_insert_inverted_function_table;
+#endif
+            return find_wow64_internal_function(process_handle.get(), static_cast<DWORD>(process_id),
+                                                "RtlInsertInvertedFunctionTable",
+                                                rtl_insert_inverted_function_table_signatures);
+        };
+        if (const auto inverted_fn = resolve_inverted_fn())
             loader_data.fn_rtl_insert_inverted_function_table = *inverted_fn;
 
         constexpr std::size_t data_aligned = (sizeof(Wow64RemoteLoaderData) + 0xF) & ~0xF;
