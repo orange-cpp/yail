@@ -7,10 +7,12 @@
 #include <cstring>
 #include <format>
 #include <limits>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
-#include <cpr/cpr.h>
+#include <windows.h>
+#include <winhttp.h>
 
 namespace yail::detail
 {
@@ -20,6 +22,28 @@ namespace yail::detail
         constexpr std::uint32_t missing_stream = std::numeric_limits<std::uint32_t>::max();
         constexpr std::uint16_t missing_stream_index = std::numeric_limits<std::uint16_t>::max();
         constexpr std::uint16_t s_pub32 = 0x110E;
+
+        class InternetHandle final
+        {
+        public:
+            explicit InternetHandle(const HINTERNET handle) : handle_{handle}
+            {
+            }
+
+            ~InternetHandle()
+            {
+                if (handle_)
+                    WinHttpCloseHandle(handle_);
+            }
+
+            [[nodiscard]] HINTERNET get() const
+            {
+                return handle_;
+            }
+
+        private:
+            HINTERNET handle_;
+        };
 
         template<typename T>
         [[nodiscard]] std::optional<T> read_value(const std::span<const std::uint8_t> data, const std::size_t offset)
@@ -257,6 +281,66 @@ namespace yail::detail
                 return std::unexpected(Error::pdb_symbols_not_found);
             return result;
         }
+
+        [[nodiscard]] std::expected<std::vector<std::uint8_t>, Error>
+        download_pdb(const std::string_view file_name, const std::string_view symbol_key)
+        {
+            const std::wstring wide_file_name{file_name.begin(), file_name.end()};
+            const std::wstring wide_symbol_key{symbol_key.begin(), symbol_key.end()};
+            const std::wstring path = L"/download/symbols/" + wide_file_name + L"/" + wide_symbol_key + L"/"
+                                      + wide_file_name;
+            const InternetHandle session{WinHttpOpen(L"yail", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+                                                     WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0)};
+            if (!session.get())
+                return std::unexpected(Error::pdb_download_failed);
+
+            DWORD redirect_policy = WINHTTP_OPTION_REDIRECT_POLICY_ALWAYS;
+            if (!WinHttpSetTimeouts(session.get(), 5000, 5000, 30000, 30000)
+                || !WinHttpSetOption(session.get(), WINHTTP_OPTION_REDIRECT_POLICY, &redirect_policy,
+                                     sizeof(redirect_policy)))
+                return std::unexpected(Error::pdb_download_failed);
+
+            const InternetHandle connection{WinHttpConnect(session.get(), L"msdl.microsoft.com", INTERNET_DEFAULT_HTTPS_PORT, 0)};
+            if (!connection.get())
+                return std::unexpected(Error::pdb_download_failed);
+
+            const InternetHandle request{WinHttpOpenRequest(connection.get(), L"GET", path.c_str(), nullptr,
+                                                             WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
+                                                             WINHTTP_FLAG_SECURE)};
+            if (!request.get())
+                return std::unexpected(Error::pdb_download_failed);
+
+            if (!WinHttpSendRequest(request.get(), WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0)
+                || !WinHttpReceiveResponse(request.get(), nullptr))
+                return std::unexpected(Error::pdb_download_failed);
+
+            DWORD status{};
+            DWORD status_size = sizeof(status);
+            if (!WinHttpQueryHeaders(request.get(), WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                                     WINHTTP_HEADER_NAME_BY_INDEX, &status, &status_size, WINHTTP_NO_HEADER_INDEX)
+                || status != HTTP_STATUS_OK)
+                return std::unexpected(Error::pdb_download_failed);
+
+            std::vector<std::uint8_t> result;
+            for (;;)
+            {
+                DWORD available{};
+                if (!WinHttpQueryDataAvailable(request.get(), &available))
+                    return std::unexpected(Error::pdb_download_failed);
+                if (available == 0)
+                    break;
+                if (available > std::numeric_limits<std::size_t>::max() - result.size())
+                    return std::unexpected(Error::pdb_download_failed);
+
+                const std::size_t offset = result.size();
+                result.resize(offset + available);
+                DWORD read{};
+                if (!WinHttpReadData(request.get(), result.data() + offset, available, &read) || read == 0)
+                    return std::unexpected(Error::pdb_download_failed);
+                result.resize(offset + read);
+            }
+            return result;
+        }
     }
 
     std::expected<PdbIdentifier, Error> parse_pdb_identifier(const std::span<const std::uint8_t> codeview_data)
@@ -292,17 +376,10 @@ namespace yail::detail
     download_ntdll_symbol_rvas(const PdbIdentifier& identifier,
                                const std::span<const PdbImageSection> image_sections)
     {
-        const std::string url = std::format("https://msdl.microsoft.com/download/symbols/{}/{}/{}",
-                                            identifier.file_name, symbol_store_key(identifier), identifier.file_name);
-        const auto response = cpr::Get(cpr::Url{url}, cpr::Redirect{true}, cpr::ConnectTimeout{5000},
-                                       cpr::Timeout{30000});
-        if (response.error.code != cpr::ErrorCode::OK)
-            return std::unexpected(Error::pdb_download_failed);
-        if (response.status_code != 200)
-            return std::unexpected(Error::pdb_download_failed);
-
-        const auto* data = reinterpret_cast<const std::uint8_t*>(response.text.data());
-        return parse_symbol_rvas({data, response.text.size()}, image_sections);
+        const auto pdb_data = download_pdb(identifier.file_name, symbol_store_key(identifier));
+        if (!pdb_data)
+            return std::unexpected(pdb_data.error());
+        return parse_symbol_rvas(*pdb_data, image_sections);
     }
 }
 #endif

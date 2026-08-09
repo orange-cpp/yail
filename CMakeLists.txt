@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.28)
 project(yail VERSION 0.0.1 LANGUAGES CXX)
 
+if (PROJECT_IS_TOP_LEVEL)
+    include(CTest)
+endif()
+
 file(GLOB_RECURSE YAIL_HEADERS "include/*.hpp")
 file(GLOB_RECURSE YAIL_SOURCES "source/*.cpp")
 
@@ -27,8 +31,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE omath::omath)
 option(YAIL_USE_PDB "Resolve private ntdll symbols from Microsoft PDBs" ON)
 
 if (YAIL_USE_PDB)
-    find_package(cpr CONFIG REQUIRED)
-    target_link_libraries(${PROJECT_NAME} PRIVATE cpr::cpr)
+    target_link_libraries(${PROJECT_NAME} PRIVATE winhttp)
     target_compile_definitions(${PROJECT_NAME} PRIVATE YAIL_USE_PDB)
 endif()
 
@@ -65,6 +68,10 @@ if (YAIL_BUILD_EXAMPLES)
     # /SUBSYSTEM:WINDOWS makes the linker pick WinMainCRTStartup as the entry,
     # which the CRT uses to dispatch to WinMain (instead of main).
     target_link_options(test_winexe PRIVATE /SUBSYSTEM:WINDOWS /DELAYLOAD:dbghelp.dll)
+
+    if (PROJECT_IS_TOP_LEVEL AND BUILD_TESTING)
+        add_test(NAME yail.test_dll COMMAND loader $<TARGET_FILE:test_dll>)
+    endif()
 endif()
 
 

@@ -2,10 +2,6 @@
 
 include(CMakeFindDependencyMacro)
 find_dependency(omath CONFIG REQUIRED)
-if (@YAIL_USE_PDB@)
-    find_dependency(cpr CONFIG REQUIRED)
-endif()
-
 include("${CMAKE_CURRENT_LIST_DIR}/yailTargets.cmake")
 
 check_required_components(yail)
