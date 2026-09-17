@@ -15,6 +15,7 @@
 - Inject by process ID or process name
 - Load from file path or raw bytes in memory
 - Returns `std::expected<uintptr_t, yail::Error>` — no exceptions or error-path allocations
+- C bindings (`include/yail/yail.h`) returning a `yail_error` status code
 
 ## Requirements
 
@@ -118,6 +119,27 @@ On success, returns the base address of the mapped image in the target process. 
 `yail::Error` code. Pass it to `yail::to_string` when a human-readable description is needed.
 
 The returned address is not a loader-managed `HMODULE`. A DLL mapped by yail is absent from the Windows loader module list, so passing that address to `FreeLibrary` or `FreeLibraryAndExitThread` is invalid. yail does not currently provide manual unmapping. A mapped DLL must stop its work and return, or be loaded with `LoadLibrary` when OS-managed unload is required.
+
+### C API
+
+`include/yail/yail.h` exposes the same functionality to C. Since C has no
+overloading, the process-name variants carry a `_by_name` suffix, and the mapped
+base address is written through an out-parameter. Every function returns a
+`yail_error` status where `YAIL_ERROR_SUCCESS` (`0`) means success; pass it to
+`yail_error_to_string` for a description.
+
+```c
+#include <yail/yail.h>
+
+uintptr_t base = 0;
+yail_error status = yail_manual_map_injection_from_file("my.dll", GetCurrentProcessId(), &base);
+if (status != YAIL_ERROR_SUCCESS)
+    printf("Failed: %s\n", yail_error_to_string(status));
+```
+
+Raw bytes use `yail_manual_map_injection_from_raw(const uint8_t* raw_pe, size_t raw_pe_size, ...)`,
+and the name-based variants are `yail_manual_map_injection_from_file_by_name` and
+`yail_manual_map_injection_from_raw_by_name`.
 
 ### Themida compatibility
 

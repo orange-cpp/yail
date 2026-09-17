@@ -5,7 +5,7 @@ if (PROJECT_IS_TOP_LEVEL)
     include(CTest)
 endif()
 
-file(GLOB_RECURSE YAIL_HEADERS "include/*.hpp")
+file(GLOB_RECURSE YAIL_HEADERS "include/*.hpp" "include/*.h")
 file(GLOB_RECURSE YAIL_SOURCES "source/*.cpp")
 
 
