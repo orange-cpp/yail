@@ -1,6 +1,5 @@
 #include <yail/detail/pdb.hpp>
 
-#ifdef YAIL_USE_PDB
 #include <algorithm>
 #include <cctype>
 #include <cstddef>
@@ -382,4 +381,3 @@ namespace yail::detail
         return parse_symbol_rvas(*pdb_data, image_sections);
     }
 }
-#endif

@@ -1,12 +1,8 @@
 #include <yail/detail/native_loader.hpp>
 #include <winternl.h>
 #include <algorithm>
-#include <array>
-#include <omath/utility/pe_pattern_scan.hpp>
-#ifdef YAIL_USE_PDB
 #include <vector>
 #include <yail/detail/pdb.hpp>
-#endif
 
 namespace yail::detail
 {
@@ -40,7 +36,6 @@ namespace yail::detail
 #endif
         // The shellcode reference implementation used for regeneration lives in tools/generate_shellcode.cpp.
 
-#ifdef YAIL_USE_PDB
         [[nodiscard]] std::expected<NtdllSymbolRvas, Error> load_native_ntdll_symbol_rvas()
         {
             const auto* ntdll = reinterpret_cast<const std::uint8_t*>(GetModuleHandleA("ntdll.dll"));
@@ -93,65 +88,30 @@ namespace yail::detail
             static const auto result = load_native_ntdll_symbol_rvas();
             return result;
         }
-#endif
     } // namespace
 
     std::expected<void*, Error> find_ldrp_handle_tls_data()
     {
-        constexpr std::array signatures = {
-#ifdef _WIN64
-            "4C 8B DC 49 89 5B ? 49 89 73 ? 57 41 54 41 55 41 56 41 57 48 81 EC ? ? ? ? 48 8B 05 ? ? ? ? 48 33 C4 48 89 84 24 ? ? ? ? 48 8B F9", // Windows 11 24H2
-            "48 89 5C 24 ? 48 89 74 24 ? 48 89 7C 24 ? 41 55 41 56 41 57 48 81 EC",
-#else
-            // x86 - patterns may need updating per Windows build
-            "8B FF 55 8B EC 83 EC ? 53 56 57 8B 7D ? 89 4D",
-            "8B FF 55 8B EC 51 51 53 56 57 8B F1 89 75",
-            "6A ? 68 ? ? ? ? E8 ? ? ? ? 8B C1 89 45 ? 89 45",
-#endif
-        };
+        const auto& symbols = native_ntdll_symbol_rvas();
+        if (!symbols)
+            return std::unexpected(symbols.error());
+        if (!symbols->ldrp_handle_tls_data)
+            return std::unexpected(Error::pdb_symbols_not_found);
 
         const auto* ntdll = GetModuleHandleA("ntdll.dll");
-#ifdef YAIL_USE_PDB
-        if (const auto& symbols = native_ntdll_symbol_rvas(); symbols && symbols->ldrp_handle_tls_data)
-            return reinterpret_cast<void*>(reinterpret_cast<std::uintptr_t>(ntdll)
-                                           + *symbols->ldrp_handle_tls_data);
-#endif
-        for (const auto* sig : signatures)
-        {
-            if (const auto result = omath::PePatternScanner::scan_for_pattern_in_loaded_module(ntdll, sig))
-                return reinterpret_cast<void*>(result.value());
-        }
-
-        return std::unexpected(Error::ldrp_handle_tls_data_not_found);
+        return reinterpret_cast<void*>(reinterpret_cast<std::uintptr_t>(ntdll) + *symbols->ldrp_handle_tls_data);
     }
 
     std::expected<void*, Error> find_rtl_insert_inverted_function_table()
     {
-        constexpr std::array signatures = {
-#ifdef _WIN64
-            "48 8B C4 48 89 58 ? 48 89 68 ? 48 89 70 ? 57 48 83 EC ? 83 60", // Windows 11 24H2
-            "4C 8B DC 49 89 5B ? 49 89 73 ? 57 48 83 EC ? 8B FA"
-#else
-            // x86 - patterns may need updating per Windows build.
-            // Win11 24H2 x86 ntdll: __fastcall convention (ECX/EDX), see typedef above.
-            "8B FF 55 8B EC 83 EC ? 53 56 57 8D 45 ? 8B FA 50 8D 55", // Win11 24H2
-            "8B FF 55 8B EC 51 51 53 56 57 8B 7D ? 8D 45",
-            "8B FF 55 8B EC 53 56 57 8B 7D ? 8D 45",
-#endif
-        };
+        const auto& symbols = native_ntdll_symbol_rvas();
+        if (!symbols)
+            return std::unexpected(symbols.error());
+        if (!symbols->rtl_insert_inverted_function_table)
+            return std::unexpected(Error::pdb_symbols_not_found);
 
         const auto* ntdll = GetModuleHandleA("ntdll.dll");
-#ifdef YAIL_USE_PDB
-        if (const auto& symbols = native_ntdll_symbol_rvas(); symbols && symbols->rtl_insert_inverted_function_table)
-            return reinterpret_cast<void*>(reinterpret_cast<std::uintptr_t>(ntdll)
-                                           + *symbols->rtl_insert_inverted_function_table);
-#endif
-        for (const auto* sig : signatures)
-        {
-            if (const auto result = omath::PePatternScanner::scan_for_pattern_in_loaded_module(ntdll, sig))
-                return reinterpret_cast<void*>(result.value());
-        }
-
-        return std::unexpected(Error::rtl_insert_inverted_function_table_not_found);
+        return reinterpret_cast<void*>(reinterpret_cast<std::uintptr_t>(ntdll)
+                                       + *symbols->rtl_insert_inverted_function_table);
     }
 }

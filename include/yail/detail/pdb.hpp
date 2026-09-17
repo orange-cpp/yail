@@ -1,6 +1,5 @@
 #pragma once
 
-#ifdef YAIL_USE_PDB
 #include <array>
 #include <cstdint>
 #include <expected>
@@ -40,4 +39,3 @@ namespace yail::detail
     std::expected<NtdllSymbolRvas, Error>
     download_ntdll_symbol_rvas(const PdbIdentifier& identifier, std::span<const PdbImageSection> image_sections);
 }
-#endif

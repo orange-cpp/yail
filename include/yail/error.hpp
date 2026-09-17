@@ -43,9 +43,6 @@ namespace yail
         invalid_forwarded_export,
         forwarded_export_recursion_limit,
         export_address_out_of_range,
-        text_section_not_found,
-        ldrp_handle_tls_data_not_found,
-        rtl_insert_inverted_function_table_not_found,
         ntdll_not_found,
         ntdll_debug_directory_missing,
         ntdll_codeview_record_missing,
@@ -99,10 +96,6 @@ namespace yail
         case Error::invalid_forwarded_export: return "remote module has an invalid forwarded export";
         case Error::forwarded_export_recursion_limit: return "forwarded export recursion limit was exceeded";
         case Error::export_address_out_of_range: return "remote export address is out of range";
-        case Error::text_section_not_found: return "ntdll .text section was not found";
-        case Error::ldrp_handle_tls_data_not_found: return "LdrpHandleTlsData was not found";
-        case Error::rtl_insert_inverted_function_table_not_found:
-            return "RtlInsertInvertedFunctionTable was not found";
         case Error::ntdll_not_found: return "loaded ntdll.dll was not found";
         case Error::ntdll_debug_directory_missing: return "ntdll.dll has no valid debug directory";
         case Error::ntdll_codeview_record_missing: return "ntdll.dll has no valid CodeView debug record";

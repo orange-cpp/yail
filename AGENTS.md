@@ -31,7 +31,7 @@ Correctness across architecture and Windows loader behavior is more important th
 ## Loader-specific invariants
 
 - Preserve both native and WOW64 paths when changing PE mapping or symbol resolution.
-- With `YAIL_USE_PDB=ON`, the matching `ntdll` PDB is the preferred source for private-symbol RVAs. Existing architecture-specific signature scans remain the runtime fallback.
+- Private `ntdll` symbol RVAs come exclusively from the PDB matching the exact loaded image's RSDS record, downloaded from the Microsoft symbol server. There is no signature-scan fallback; a failed download is a hard error.
 - PDB identity must come from the exact loaded image's RSDS record; never use a hard-coded symbol-server identity.
 - `RtlInsertInvertedFunctionTable` is required for x64 and optional for x86 as documented by the current call sites.
 - Do not change calling conventions for private `ntdll` functions without validating the affected Windows architecture and build.
@@ -48,15 +48,6 @@ cmake --build cmake-build/build/windows-debug-vcpkg
 
 cmake --preset windows-debug-vcpkg-x86
 cmake --build cmake-build/build/windows-debug-vcpkg-x86
-```
-
-When a change affects conditional PDB code, build both configurations:
-
-```powershell
-cmake --preset windows-debug-vcpkg -DYAIL_USE_PDB=ON
-cmake --build cmake-build/build/windows-debug-vcpkg
-cmake --preset windows-debug-vcpkg -DYAIL_USE_PDB=OFF
-cmake --build cmake-build/build/windows-debug-vcpkg
 ```
 
 Repeat the relevant checks with `windows-debug-vcpkg-x86` for x86-sensitive changes. The presets share `cmake-build/vcpkg_installed`; avoid configuring x64 and x86 concurrently because manifest operations can race over that directory.

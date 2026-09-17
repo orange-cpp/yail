@@ -7,7 +7,9 @@
 - Maps both **DLLs** and **EXEs** — auto-detected via `IMAGE_FILE_DLL`
   - DLLs invoked as `DllMain(HMODULE, DLL_PROCESS_ATTACH, nullptr)`
   - EXEs invoked as `int __cdecl mainCRTStartup(void)` — works with both `main`-style (console subsystem) and `WinMain`-style (GUI subsystem) entries
-- Static TLS via signature-scanned `LdrpHandleTlsData`
+- Static TLS via `LdrpHandleTlsData`
+- Private `ntdll` routines (`LdrpHandleTlsData`, `RtlInsertInvertedFunctionTable`) resolved from the exact
+  loaded image's CodeView RSDS record through the Microsoft symbol server
 - TLS callbacks (`.CRT$XLB`)
 - Static and delay-loaded imports
 - Exception handling (SEH/VEH/C++) compatible with manually-mapped images
@@ -19,7 +21,9 @@
 
 ## Requirements
 
-- Windows 10 / 11 (signature scans target Windows 11 24H2 ntdll by default; older builds may need pattern updates)
+- Windows 10 / 11
+- Network access to `msdl.microsoft.com` — the matching `ntdll` PDB is downloaded at runtime to resolve
+  private symbol RVAs
 - C++23 compiler (MSVC recommended)
 - CMake 3.28+
 - vcpkg
@@ -177,16 +181,16 @@ loader.exe test_exe.exe       # 16 tests + ExitThread keeps the loader alive
 loader.exe test_winexe.exe    # WinMain path + GUI subsystem checks
 ```
 
-## Signature notes
+## Symbol resolution
 
-The library locates two non-exported ntdll routines by byte signatures:
+The library locates two non-exported ntdll routines:
 
 - `LdrpHandleTlsData` — used to register static TLS for the mapped image
 - `RtlInsertInvertedFunctionTable` — used to make the image's exception/SEH handlers visible to the OS exception dispatcher
 
-Patterns are versioned per architecture and have been verified on **Windows 11 24H2**. Older Windows builds may require updated signatures — locate the function in WinDbg (`x ntdll!LdrpHandleTlsData`, `uf <addr>`), take ~16 unique leading bytes, and add the wildcarded pattern to the corresponding signature array in `source/native_loader.cpp` or `source/wow64.cpp`.
+Both are resolved from the PDB that matches the exact loaded `ntdll.dll`. YAIL reads the image's CodeView `RSDS` record for the PDB file name, GUID, and age, downloads that PDB from the Microsoft public symbol server, and parses the symbol stream for the two RVAs. There is no signature-scan fallback: the runtime requires network access to `msdl.microsoft.com`, and a failed or mismatched download is a hard error.
 
-On modern x86 ntdll, both functions use `__fastcall` (args in `ECX`/`EDX`) despite their legacy `_Name@N` symbol decoration — the typedef and call sites in the source reflect that. If you target an older x86 Windows where these are still `__stdcall`, you'll need to swap the typedef to `NTAPI*`.
+For WOW64 targets, the same RSDS lookup is performed against the 32-bit `ntdll.dll` read out of the target process. On modern x86 ntdll, both functions use `__fastcall` (args in `ECX`/`EDX`) despite their legacy `_Name@N` symbol decoration — the typedef and call sites in the source reflect that. If you target an older x86 Windows where these are still `__stdcall`, you'll need to swap the typedef to `NTAPI*`.
 
 The shellcode implementation used for generation lives in `tools/generate_shellcode.cpp`. After changing it, rebuild both `generate_shellcode` targets and refresh `source/shellcode.cpp`:
 

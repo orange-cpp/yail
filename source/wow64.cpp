@@ -4,20 +4,16 @@
 #include <Windows.h>
 #include <TlHelp32.h>
 #include <algorithm>
-#include <array>
 #include <charconv>
 #include <cstddef>
 #include <cstring>
 #include <limits>
-#include <omath/utility/pattern_scan.hpp>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 #include <yail/detail/pe.hpp>
-#ifdef YAIL_USE_PDB
 #include <yail/detail/pdb.hpp>
-#endif
 #include <yail/detail/process.hpp>
 #include <yail/detail/shellcode.hpp>
 
@@ -303,57 +299,6 @@ namespace yail::detail
             return *module_base + function_rva;
         }
 
-        [[nodiscard]]
-        std::expected<std::uint32_t, Error>
-        find_wow64_internal_function(const HANDLE process_handle, const DWORD process_id, const Error not_found_error,
-                                     const std::span<const std::string_view> signatures)
-        {
-            const auto module_base = find_wow64_module_base(process_id, "ntdll.dll");
-            if (!module_base)
-                return std::unexpected(module_base.error());
-            const auto headers = read_wow64_pe_headers(process_handle, *module_base);
-            if (!headers)
-                return std::unexpected(headers.error());
-
-            std::vector<IMAGE_SECTION_HEADER> sections(headers->nt_headers.FileHeader.NumberOfSections);
-            const auto section_headers_address = static_cast<std::uintptr_t>(*module_base)
-                                                 + static_cast<std::uint32_t>(headers->dos_headers.e_lfanew)
-                                                 + sizeof(DWORD) + sizeof(IMAGE_FILE_HEADER)
-                                                 + headers->nt_headers.FileHeader.SizeOfOptionalHeader;
-            if (const auto read = read_remote_memory(process_handle, section_headers_address, sections.data(),
-                                                     sections.size() * sizeof(IMAGE_SECTION_HEADER));
-                !read)
-                return std::unexpected(read.error());
-
-            constexpr std::array<std::uint8_t, 5> text_name{'.', 't', 'e', 'x', 't'};
-            const auto section =
-                    std::ranges::find_if(sections,
-                                         [&](const IMAGE_SECTION_HEADER& candidate)
-                                         {
-                                             return std::equal(text_name.begin(), text_name.end(), candidate.Name);
-                                         });
-            if (section == sections.end() || !section->Misc.VirtualSize)
-                return std::unexpected(Error::text_section_not_found);
-
-            std::vector<std::uint8_t> section_data(section->Misc.VirtualSize);
-            if (const auto read = read_remote_memory(process_handle, *module_base + section->VirtualAddress,
-                                                     section_data.data(), section_data.size());
-                !read)
-                return std::unexpected(read.error());
-
-            auto* const section_begin = reinterpret_cast<std::byte*>(section_data.data());
-            auto* const section_end = section_begin + section_data.size();
-            for (const auto signature : signatures)
-            {
-                const auto match = omath::PatternScanner::scan_for_pattern(section_begin, section_end, signature);
-                if (match != section_end)
-                    return *module_base + section->VirtualAddress + static_cast<std::uint32_t>(match - section_begin);
-            }
-
-            return std::unexpected(not_found_error);
-        }
-
-#ifdef YAIL_USE_PDB
         struct Wow64NtdllSymbolAddresses final
         {
             std::optional<std::uint32_t> ldrp_handle_tls_data;
@@ -440,7 +385,6 @@ namespace yail::detail
 
             return std::unexpected(Error::ntdll_codeview_record_missing);
         }
-#endif
     } // namespace
 
     std::expected<std::uintptr_t, Error>
@@ -520,48 +464,15 @@ namespace yail::detail
             return fail_image(virtual_protect.error());
         loader_data.fn_virtual_protect = *virtual_protect;
 
-#ifdef YAIL_USE_PDB
         const auto pdb_symbols =
                 find_wow64_ntdll_symbol_addresses(process_handle.get(), static_cast<DWORD>(process_id));
-#endif
-
-        constexpr std::array<std::string_view, 3> ldrp_handle_tls_data_signatures{
-                "8B FF 55 8B EC 83 EC ? 53 56 57 8B 7D ? 89 4D",
-                "8B FF 55 8B EC 51 51 53 56 57 8B F1 89 75",
-                "6A ? 68 ? ? ? ? E8 ? ? ? ? 8B C1 89 45 ? 89 45",
-        };
-        const auto resolve_tls_fn = [&]() -> std::expected<std::uint32_t, Error>
-        {
-#ifdef YAIL_USE_PDB
-            if (pdb_symbols && pdb_symbols->ldrp_handle_tls_data)
-                return *pdb_symbols->ldrp_handle_tls_data;
-#endif
-            return find_wow64_internal_function(process_handle.get(), static_cast<DWORD>(process_id),
-                                                Error::ldrp_handle_tls_data_not_found,
-                                                ldrp_handle_tls_data_signatures);
-        };
-        const auto tls_fn = resolve_tls_fn();
-        if (!tls_fn)
-            return fail_image(tls_fn.error());
-        loader_data.fn_ldrp_handle_tls_data = *tls_fn;
-
-        constexpr std::array<std::string_view, 3> rtl_insert_inverted_function_table_signatures{
-                "8B FF 55 8B EC 83 EC ? 53 56 57 8D 45 ? 8B FA 50 8D 55",
-                "8B FF 55 8B EC 51 51 53 56 57 8B 7D ? 8D 45",
-                "8B FF 55 8B EC 53 56 57 8B 7D ? 8D 45",
-        };
-        const auto resolve_inverted_fn = [&]() -> std::expected<std::uint32_t, Error>
-        {
-#ifdef YAIL_USE_PDB
-            if (pdb_symbols && pdb_symbols->rtl_insert_inverted_function_table)
-                return *pdb_symbols->rtl_insert_inverted_function_table;
-#endif
-            return find_wow64_internal_function(process_handle.get(), static_cast<DWORD>(process_id),
-                                                Error::rtl_insert_inverted_function_table_not_found,
-                                                rtl_insert_inverted_function_table_signatures);
-        };
-        if (const auto inverted_fn = resolve_inverted_fn())
-            loader_data.fn_rtl_insert_inverted_function_table = *inverted_fn;
+        if (!pdb_symbols)
+            return fail_image(pdb_symbols.error());
+        if (!pdb_symbols->ldrp_handle_tls_data)
+            return fail_image(Error::pdb_symbols_not_found);
+        loader_data.fn_ldrp_handle_tls_data = *pdb_symbols->ldrp_handle_tls_data;
+        if (pdb_symbols->rtl_insert_inverted_function_table)
+            loader_data.fn_rtl_insert_inverted_function_table = *pdb_symbols->rtl_insert_inverted_function_table;
 
         constexpr std::size_t data_aligned = (sizeof(Wow64RemoteLoaderData) + 0xF) & ~0xF;
         const auto shellcode = yail::detail::x86_remote_shellcode();

@@ -25,15 +25,9 @@ target_compile_options(${PROJECT_NAME} PRIVATE
     $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall -Wextra -Wpedantic -Werror>
 )
 
-find_package(omath CONFIG REQUIRED)
-target_link_libraries(${PROJECT_NAME} PRIVATE omath::omath)
+target_compile_definitions(${PROJECT_NAME} PRIVATE NOMINMAX)
 
-option(YAIL_USE_PDB "Resolve private ntdll symbols from Microsoft PDBs" ON)
-
-if (YAIL_USE_PDB)
-    target_link_libraries(${PROJECT_NAME} PRIVATE winhttp)
-    target_compile_definitions(${PROJECT_NAME} PRIVATE YAIL_USE_PDB)
-endif()
+target_link_libraries(${PROJECT_NAME} PRIVATE winhttp)
 
 add_executable(generate_shellcode tools/generate_shellcode.cpp)
 set_target_properties(generate_shellcode PROPERTIES CXX_STANDARD 23)
