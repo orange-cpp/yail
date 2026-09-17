@@ -19,9 +19,9 @@
 
 namespace yail
 {
-    static std::expected<std::uintptr_t, Error>
+static std::expected<std::uintptr_t, Error>
     manual_map_injection_from_raw_impl(const std::span<const std::uint8_t>& raw_dll,
-                                       const std::uintptr_t process_id)
+                                       const std::uintptr_t process_id, const std::uint32_t options)
     {
         const auto pe_machine = detail::get_pe_machine(raw_dll);
         if (!pe_machine)
@@ -29,7 +29,7 @@ namespace yail
 
 #ifdef _WIN64
         if (*pe_machine == IMAGE_FILE_MACHINE_I386)
-            return detail::manual_map_injection_into_wow64_process(raw_dll, process_id);
+            return detail::manual_map_injection_into_wow64_process(raw_dll, process_id, options);
         constexpr WORD expected_machine = IMAGE_FILE_MACHINE_AMD64;
 #else
         constexpr WORD expected_machine = IMAGE_FILE_MACHINE_I386;
@@ -139,6 +139,7 @@ namespace yail
         loader_data.fn_rtl_add_function_table = RtlAddFunctionTable;
 #endif
         loader_data.fn_virtual_protect = VirtualProtect;
+        loader_data.options = options;
         const auto tls_fn = detail::find_ldrp_handle_tls_data();
         if (!tls_fn)
             return fail_image(tls_fn.error());
@@ -194,25 +195,28 @@ namespace yail
         return reinterpret_cast<std::uintptr_t>(remote_image);
     }
 
-    std::expected<std::uintptr_t, Error>
-    manual_map_injection_from_raw(const std::span<const std::uint8_t>& raw_dll, const std::uintptr_t process_id)
+std::expected<std::uintptr_t, Error>
+    manual_map_injection_from_raw(const std::span<const std::uint8_t>& raw_dll, const std::uintptr_t process_id,
+                                  const std::uint32_t options)
     {
-        return manual_map_injection_from_raw_impl(raw_dll, process_id);
+        return manual_map_injection_from_raw_impl(raw_dll, process_id, options);
     }
 
     std::expected<std::uintptr_t, Error>
-    manual_map_injection_from_raw(const std::span<const std::uint8_t>& raw_dll, const std::string_view& process_name)
+    manual_map_injection_from_raw(const std::span<const std::uint8_t>& raw_dll, const std::string_view& process_name,
+                                  const std::uint32_t options)
     {
         const auto pid = detail::get_process_id_by_name(process_name);
 
         if (!pid)
             return std::unexpected(Error::process_not_found);
 
-        return manual_map_injection_from_raw(raw_dll, pid.value());
+        return manual_map_injection_from_raw(raw_dll, pid.value(), options);
     }
 
     std::expected<std::uintptr_t, Error> manual_map_injection_from_file(const std::string_view& dll_path,
-                                                                        const std::uintptr_t process_id)
+                                                                        const std::uintptr_t process_id,
+                                                                        const std::uint32_t options)
     {
         if (!std::filesystem::exists(dll_path))
             return std::unexpected(Error::file_not_found);
@@ -224,16 +228,17 @@ namespace yail
         file.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(data.size()));
         file.close();
 
-        return manual_map_injection_from_raw_impl({data.data(), data.size()}, process_id);
+        return manual_map_injection_from_raw_impl({data.data(), data.size()}, process_id, options);
     }
 
     std::expected<std::uintptr_t, Error> manual_map_injection_from_file(const std::string_view& dll_path,
-                                                                        const std::string_view& process_name)
+                                                                        const std::string_view& process_name,
+                                                                        const std::uint32_t options)
     {
         const auto pid = detail::get_process_id_by_name(process_name);
         if (!pid)
             return std::unexpected(Error::process_not_found);
 
-        return manual_map_injection_from_file(dll_path, pid.value());
+        return manual_map_injection_from_file(dll_path, pid.value(), options);
     }
 } // namespace yail

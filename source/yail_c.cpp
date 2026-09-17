@@ -43,45 +43,47 @@ extern "C"
     }
 
     yail_error yail_manual_map_injection_from_file(const char* pe_path, const std::uintptr_t process_id,
-                                                   std::uintptr_t* const out_base_address)
+                                                   const std::uint32_t options, std::uintptr_t* const out_base_address)
     {
         if (pe_path == nullptr)
             return YAIL_ERROR_INVALID_ARGUMENT;
 
-        return store_result(yail::manual_map_injection_from_file(pe_path, process_id), out_base_address);
+        return store_result(yail::manual_map_injection_from_file(pe_path, process_id, options), out_base_address);
     }
 
     yail_error yail_manual_map_injection_from_file_by_name(const char* pe_path, const char* process_name,
+                                                           const std::uint32_t options,
                                                            std::uintptr_t* const out_base_address)
     {
         if (pe_path == nullptr || process_name == nullptr)
             return YAIL_ERROR_INVALID_ARGUMENT;
 
-        return store_result(yail::manual_map_injection_from_file(pe_path, std::string_view(process_name)),
+        return store_result(yail::manual_map_injection_from_file(pe_path, std::string_view(process_name), options),
                             out_base_address);
     }
 
     yail_error yail_manual_map_injection_from_raw(const std::uint8_t* raw_pe, const std::size_t raw_pe_size,
-                                                  const std::uintptr_t process_id,
+                                                  const std::uintptr_t process_id, const std::uint32_t options,
                                                   std::uintptr_t* const out_base_address)
     {
         if (raw_pe == nullptr && raw_pe_size != 0)
             return YAIL_ERROR_INVALID_ARGUMENT;
 
         return store_result(
-                yail::manual_map_injection_from_raw(std::span<const std::uint8_t>(raw_pe, raw_pe_size), process_id),
+                yail::manual_map_injection_from_raw(std::span<const std::uint8_t>(raw_pe, raw_pe_size), process_id,
+                                                    options),
                 out_base_address);
     }
 
     yail_error yail_manual_map_injection_from_raw_by_name(const std::uint8_t* raw_pe, const std::size_t raw_pe_size,
-                                                          const char* process_name,
+                                                          const char* process_name, const std::uint32_t options,
                                                           std::uintptr_t* const out_base_address)
     {
         if ((raw_pe == nullptr && raw_pe_size != 0) || process_name == nullptr)
             return YAIL_ERROR_INVALID_ARGUMENT;
 
         return store_result(yail::manual_map_injection_from_raw(std::span<const std::uint8_t>(raw_pe, raw_pe_size),
-                                                                std::string_view(process_name)),
+                                                                std::string_view(process_name), options),
                             out_base_address);
     }
 } // extern "C"

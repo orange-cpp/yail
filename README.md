@@ -101,21 +101,26 @@ auto result = yail::manual_map_injection_from_raw(bytes, "x86-target.exe");
 ```cpp
 namespace yail
 {
-    // Both functions accept DLLs and EXEs (matched by IMAGE_FILE_DLL).
-    // Native PE machine type must match the build. An x64 build also accepts
-    // I386 PEs when the target is a WOW64 process.
+    // Optional post-load hardening, combined with `|`:
+    //   yail::manual_map_erase_headers  - zero DOS/NT/section headers after entry returns
+    //   yail::manual_map_wipe_imports   - zero import descriptors/names, keep the resolved IAT
+    // Both are no-ops for injected EXEs (the EXE entry never returns).
 
     std::expected<uintptr_t, Error>
-    manual_map_injection_from_file(std::string_view pe_path, std::uintptr_t process_id);
+    manual_map_injection_from_file(std::string_view pe_path, std::uintptr_t process_id,
+                                   std::uint32_t options = 0);
 
     std::expected<uintptr_t, Error>
-    manual_map_injection_from_file(std::string_view pe_path, std::string_view process_name);
+    manual_map_injection_from_file(std::string_view pe_path, std::string_view process_name,
+                                   std::uint32_t options = 0);
 
     std::expected<uintptr_t, Error>
-    manual_map_injection_from_raw(const std::span<std::uint8_t>& raw_pe, std::uintptr_t process_id);
+    manual_map_injection_from_raw(const std::span<std::uint8_t>& raw_pe, std::uintptr_t process_id,
+                                  std::uint32_t options = 0);
 
     std::expected<uintptr_t, Error>
-    manual_map_injection_from_raw(const std::span<std::uint8_t>& raw_pe, std::string_view process_name);
+    manual_map_injection_from_raw(const std::span<std::uint8_t>& raw_pe, std::string_view process_name,
+                                  std::uint32_t options = 0);
 }
 ```
 
@@ -136,7 +141,7 @@ base address is written through an out-parameter. Every function returns a
 #include <yail/yail.h>
 
 uintptr_t base = 0;
-yail_error status = yail_manual_map_injection_from_file("my.dll", GetCurrentProcessId(), &base);
+yail_error status = yail_manual_map_injection_from_file("my.dll", GetCurrentProcessId(), 0, &base);
 if (status != YAIL_ERROR_SUCCESS)
     printf("Failed: %s\n", yail_error_to_string(status));
 ```
@@ -144,6 +149,26 @@ if (status != YAIL_ERROR_SUCCESS)
 Raw bytes use `yail_manual_map_injection_from_raw(const uint8_t* raw_pe, size_t raw_pe_size, ...)`,
 and the name-based variants are `yail_manual_map_injection_from_file_by_name` and
 `yail_manual_map_injection_from_raw_by_name`.
+
+### Anti-dump hardening
+
+Pass a combination of the option flags as the final `options` argument to make the mapped image harder
+to dump after initialization:
+
+```cpp
+auto result = yail::manual_map_injection_from_file(
+        "my.dll", "target.exe",
+        yail::manual_map_erase_headers | yail::manual_map_wipe_imports);
+```
+
+- `manual_map_erase_headers` zeroes the DOS/NT/section headers once the entry point returns, so a dumper
+  can't recover the on-disk PE header structure from memory.
+- `manual_map_wipe_imports` zeroes the import descriptors and the module/symbol name tables while keeping
+  the resolved IAT, defeating import-reconstruction-based dumpers.
+
+Both run after `LoadLibrary`-time initialization, are **off by default**, and are no-ops for injected EXEs
+(their entry never returns). They are irreversible: a hardened DLL can no longer self-query its headers or
+resolve imports reflectively, and delay imports are intentionally left intact.
 
 ### Themida compatibility
 

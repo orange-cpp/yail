@@ -74,23 +74,31 @@ extern "C"
     // pointer must not be freed.
     const char* yail_error_to_string(yail_error error);
 
+    // Manual post-load hardening flags, combined with `|`. Pass 0 for no hardening.
+    enum yail_manual_map_option
+    {
+        YAIL_MANUAL_MAP_ERASE_HEADERS = 1u << 0,
+        YAIL_MANUAL_MAP_WIPE_IMPORTS = 1u << 1
+    };
+
     // Manual-maps a PE from disk. Accepts both DLLs and EXEs. The target is
-    // selected by process ID.
+    // selected by process ID; options is a yail_manual_map_option bitmask.
     // On success the mapped image base is written to out_base_address, when non-null.
-    yail_error yail_manual_map_injection_from_file(const char* pe_path, uintptr_t process_id,
+    yail_error yail_manual_map_injection_from_file(const char* pe_path, uintptr_t process_id, uint32_t options,
                                                     uintptr_t* out_base_address);
 
     // Manual-maps a PE from disk into the first process matching process_name.
     yail_error yail_manual_map_injection_from_file_by_name(const char* pe_path, const char* process_name,
-                                                           uintptr_t* out_base_address);
+                                                           uint32_t options, uintptr_t* out_base_address);
 
     // Manual-maps a PE from raw bytes. raw_pe must point to at least raw_pe_size readable bytes.
     yail_error yail_manual_map_injection_from_raw(const uint8_t* raw_pe, size_t raw_pe_size, uintptr_t process_id,
-                                                  uintptr_t* out_base_address);
+                                                  uint32_t options, uintptr_t* out_base_address);
 
     // Manual-maps a PE from raw bytes into the first process matching process_name.
     yail_error yail_manual_map_injection_from_raw_by_name(const uint8_t* raw_pe, size_t raw_pe_size,
-                                                          const char* process_name, uintptr_t* out_base_address);
+                                                          const char* process_name, uint32_t options,
+                                                          uintptr_t* out_base_address);
 
 #ifdef __cplusplus
 }

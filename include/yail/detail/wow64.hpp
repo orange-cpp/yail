@@ -7,8 +7,9 @@
 namespace yail::detail
 {
 #ifdef _WIN64
-    [[nodiscard]]
+[[nodiscard]]
     std::expected<std::uintptr_t, Error>
-    manual_map_injection_into_wow64_process(const std::span<const std::uint8_t>& raw_pe, std::uintptr_t process_id);
+    manual_map_injection_into_wow64_process(const std::span<const std::uint8_t>& raw_pe, std::uintptr_t process_id,
+                                            std::uint32_t options);
 #endif
 } // namespace yail::detail

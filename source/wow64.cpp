@@ -33,8 +33,9 @@ namespace yail::detail
             std::uint32_t fn_virtual_protect;
             std::uint32_t fn_ldrp_handle_tls_data;
             std::uint32_t fn_rtl_insert_inverted_function_table;
+            std::uint32_t options;
         };
-        static_assert(sizeof(Wow64RemoteLoaderData) == 44);
+        static_assert(sizeof(Wow64RemoteLoaderData) == 48);
 
         [[nodiscard]]
         bool relocate_wow64_image_for_base(std::uint8_t* local_image, const std::uint32_t target_base)
@@ -389,7 +390,7 @@ namespace yail::detail
 
     std::expected<std::uintptr_t, Error>
     manual_map_injection_into_wow64_process(const std::span<const std::uint8_t>& raw_pe,
-                                            const std::uintptr_t process_id)
+                                            const std::uintptr_t process_id, const std::uint32_t options)
     {
         if (const auto architecture = validate_target_machine(process_id, IMAGE_FILE_MACHINE_I386); !architecture)
             return std::unexpected(architecture.error());
@@ -463,6 +464,7 @@ namespace yail::detail
         if (!virtual_protect)
             return fail_image(virtual_protect.error());
         loader_data.fn_virtual_protect = *virtual_protect;
+        loader_data.options = options;
 
         const auto pdb_symbols =
                 find_wow64_ntdll_symbol_addresses(process_handle.get(), static_cast<DWORD>(process_id));

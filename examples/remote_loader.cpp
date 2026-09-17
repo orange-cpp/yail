@@ -1,10 +1,12 @@
 #include <cstdio>
 #include <string>
+
+#include "yail/yail.h"
 #include "yail/yail.hpp"
 
 int main(int argc, char* argv[])
 {
-    std::string dllPath = R"(C:\Users\orange\CLionProjects\avhook-titanfall2\build\x64-release\Wraith.dll)";
+    std::string dllPath = R"(C:\Users\orange\CLionProjects\avhook-titanfall2\build\x64-release\Wraith_protected.dll)";
     std::string target  = "Titanfall2.exe";
 
     if (argc > 1) dllPath = argv[1];
@@ -14,7 +16,7 @@ int main(int argc, char* argv[])
 
     printf("[remote_loader] Injecting: %s\n\n", dllPath.c_str());
 
-    auto result = yail::manual_map_injection_from_file(dllPath, target);
+    auto result = yail::manual_map_injection_from_file(dllPath, target, YAIL_MANUAL_MAP_ERASE_HEADERS | YAIL_MANUAL_MAP_WIPE_IMPORTS);
 
     if (!result)
     {

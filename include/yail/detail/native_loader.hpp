@@ -24,6 +24,7 @@ namespace yail::detail
         decltype(&VirtualProtect) fn_virtual_protect;
         void* fn_ldrp_handle_tls_data;
         void* fn_rtl_insert_inverted_function_table;
+        std::uint32_t options;
     };
 
     [[nodiscard]]

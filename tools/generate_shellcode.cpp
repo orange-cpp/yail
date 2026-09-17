@@ -54,7 +54,11 @@ struct RemoteLoaderData final
     decltype(&VirtualProtect) fn_virtual_protect;
     void* fn_ldrp_handle_tls_data;
     void* fn_rtl_insert_inverted_function_table;
+    std::uint32_t options;
 };
+
+constexpr std::uint32_t manual_map_erase_headers = 1u << 0;
+constexpr std::uint32_t manual_map_wipe_imports = 1u << 1;
 
 struct FunctionSizeResult
 {
@@ -317,6 +321,7 @@ DWORD WINAPI remote_shellcode(const RemoteLoaderData* data)
 {
     auto* base = data->image_base;
     auto* nt_headers = reinterpret_cast<IMAGE_NT_HEADERS*>(base + data->nt_headers_rva);
+    const std::uint32_t options = data->options;
 
     // --- Resolve imports ---
     // ReSharper disable once CppUseStructuredBinding
@@ -354,6 +359,46 @@ DWORD WINAPI remote_shellcode(const RemoteLoaderData* data)
                 first_trunk++;
             }
             desc++;
+        }
+    }
+
+    // --- Optional import wipe (names/descriptors, keeps the resolved IAT) ---
+    // Runs before per-section protection while the image is still RWX.
+    if (options & manual_map_wipe_imports)
+    {
+        const auto& wipe_dir = nt_headers->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+        if (wipe_dir.Size)
+        {
+            auto* desc = reinterpret_cast<IMAGE_IMPORT_DESCRIPTOR*>(base + wipe_dir.VirtualAddress);
+            while (desc->Name)
+            {
+                for (char* name = reinterpret_cast<char*>(base + desc->Name); *name; name++)
+                    *name = 0;
+
+                if (desc->OriginalFirstThunk)
+                {
+                    auto* lookup = reinterpret_cast<IMAGE_THUNK_DATA*>(base + desc->OriginalFirstThunk);
+                    while (lookup->u1.AddressOfData)
+                    {
+                        if (!(lookup->u1.Ordinal & IMAGE_ORDINAL_FLAG))
+                        {
+                            auto* ibn = reinterpret_cast<IMAGE_IMPORT_BY_NAME*>(base + lookup->u1.AddressOfData);
+                            for (char* symbol = &ibn->Name[0]; *symbol; symbol++)
+                                *symbol = 0;
+                        }
+                        lookup->u1.AddressOfData = 0;
+                        lookup++;
+                    }
+                }
+
+                desc->OriginalFirstThunk = 0;
+                desc->TimeDateStamp = 0;
+                desc->ForwarderChain = 0;
+                desc->Name = 0;
+                desc->FirstThunk = 0;
+                desc++;
+            }
+            nt_headers->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT] = {0, 0};
         }
     }
 
@@ -505,6 +550,16 @@ DWORD WINAPI remote_shellcode(const RemoteLoaderData* data)
                     reinterpret_cast<int(__cdecl*)()>(base + nt_headers->OptionalHeader.AddressOfEntryPoint);
             entry_point();
         }
+    }
+
+    // --- Optional anti-dump hardening (post-init) ---
+
+    if (options & manual_map_erase_headers)
+    {
+        const DWORD headers_size = nt_headers->OptionalHeader.SizeOfHeaders;
+        volatile std::uint8_t* headers = reinterpret_cast<volatile std::uint8_t*>(base);
+        for (std::uint32_t i = 0; i < headers_size; i++)
+            headers[i] = 0;
     }
 
     return 0;
