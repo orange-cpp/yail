@@ -316,8 +316,6 @@ int main(int argc, char** argv)
     printf("[test_exe] Results: %d/%d passed\n", g_passed, g_total);
     printf("========================================\n");
 
-    MessageBoxA(nullptr, "All EXE tests have completed!", "yail", MB_OK);
-
     // Returning from main() would invoke the CRT's exit() -> ExitProcess and
     // terminate the host loader process. Exit only this thread instead so the
     // loader's WaitForSingleObject wakes and the process keeps running.

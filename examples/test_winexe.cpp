@@ -146,8 +146,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     printf("[test_winexe] Results: %d/%d passed\n", g_passed, g_total);
     printf("========================================\n");
 
-    MessageBoxA(nullptr, "WinMain EXE tests have completed!", "yail", MB_OK);
-
     // ExitThread to keep the host loader process alive — see test_exe.cpp.
     ExitThread(0);
 }
